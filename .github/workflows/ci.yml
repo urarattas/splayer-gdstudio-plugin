@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build plugin
+        run: npm run build
+      - name: Verify tracked distribution artifact unchanged by build
+        run: git diff --exit-code -- dist/gdstudio.splayer-source.js
+      - name: Verify source and distribution parity
+        run: npm run check:dist
+      - name: Smoke-test distribution artifact
+        run: npm run check:artifact
+      - name: Run tests
+        run: npm test
+      - name: Check JavaScript syntax
+        run: npm run check
