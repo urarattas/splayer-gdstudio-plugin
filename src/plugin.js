@@ -1,26 +1,23 @@
 /**
  * @name        GD Studio 音源
  * @id          gdstudio.splayer-source
- * @version     1.1.0
- * @description 为 SPlayer-Next 提供网易云 / JOOX 的播放地址、歌词与封面：逐档解析音质、交付体检，无版权时跨平台兜底
+ * @version     1.2.0
+ * @description 官方音源拿不到时，用 GD Studio 接管网易云播放地址；歌词与封面保持官方，逐档解析音质并交付体检
  * @author      splayer-gdstudio-plugin
  * @type        source
  * @grant       network
  * @apiLevel    5
- * @changelog   新增 GD Studio 网易云独立曲库与插件音质选择（默认 hi-res）
+ * @changelog   移除独立曲库与 GD 歌词/封面，只接管官方拿不到的播放地址（默认 hi-res）
  */
 
 const API_BASE_URL = "https://music-api.gdstudio.xyz/api.php";
 const REQUEST_TIMEOUT = 15_000;
 // SPlayer 给 musicUrl 的时限是 20 秒，留两秒给宿主做清理。
 const RESOLUTION_TIME_BUDGET = 18_000;
-// 歌词、封面和搜索结果动作的宿主时限是 15 秒。
-const METADATA_TIME_BUDGET = 12_000;
 const CROSS_PLATFORM_TIME_BUDGET = 8_000;
 const CROSS_PLATFORM_REQUEST_BUDGET = 4;
 const CROSS_PLATFORM_MAX_CANDIDATES = 2;
 const SEARCH_RESULT_LIMIT = 10;
-const SEARCH_PAGE_LIMIT = 50;
 // GD Studio 的关键词直接进 URL 参数；统一截断，避免过长请求被拒。
 const SEARCH_KEYWORD_MAX_LENGTH = 60;
 const CACHE_LIMIT = 128;
@@ -49,7 +46,6 @@ const CHANNEL_COOLDOWN_ERROR = "GD_CHANNEL_COOLDOWN";
 const NETWORK_ERROR = "GD_NETWORK_ERROR";
 const REQUEST_TIMEOUT_ERROR = "GD_REQUEST_TIMEOUT";
 const RESOLUTION_TIMEOUT_ERROR = "GD_RESOLUTION_TIMEOUT";
-const METADATA_TIMEOUT_ERROR = "GD_METADATA_TIMEOUT";
 const CROSS_PLATFORM_LIMIT_ERROR = "GD_CROSS_PLATFORM_LIMIT";
 const CROSS_PLATFORM_UNAVAILABLE_ERROR = "GD_CROSS_PLATFORM_UNAVAILABLE";
 const TRACK_UNAVAILABLE_ERROR = "GD_TRACK_UNAVAILABLE";
@@ -91,28 +87,17 @@ const QUALITY_FALLBACKS = Object.fromEntries(
 );
 
 const SOURCE_POLICIES = {
+  // SPlayer 内置来源：只补播放地址，歌词与封面保持官方。
   wy: {
     name: "GD Studio 网易云",
     apiSource: "netease",
-    // SPlayer 内置来源：只补播放地址与元数据，不新增搜索入口。
-    catalog: false,
     identity: { idFields: ["id", "songId", "songmid"] },
     crossPlatform: ["joox"],
   },
-  // 独立曲库：用 GD Studio 的网易云曲库替换 SPlayer 内置来源。
-  // 从搜索页选择「GD Studio 网易云曲库」后，搜索与播放都只经过插件，不经过官方接口。
-  gdstudio: {
-    name: "GD Studio 网易云曲库",
-    apiSource: "netease",
-    catalog: true,
-    identity: { idFields: ["id", "songmid", "songId"] },
-    crossPlatform: ["joox"],
-  },
+  // 只作为跨平台兜底目标使用，不在搜索页注册。
   joox: {
-    name: "GD Studio JOOX 曲库",
+    name: "GD Studio JOOX",
     apiSource: "joox",
-    // 独立来源：声明 musicSearch 后出现在搜索页的「插件」入口。
-    catalog: true,
     identity: { idFields: ["id", "songmid", "songId"] },
     crossPlatform: ["wy"],
   },
@@ -138,7 +123,7 @@ const getSourcePolicy = (source) => {
   if (!policy) {
     throw pluginError(
       "GD_SOURCE_UNSUPPORTED",
-      `不支持的 SPlayer 音源：${String(source)}。GD Studio 音源只解析网易云（wy）与 JOOX（joox）。`,
+      `不支持的 SPlayer 音源：${String(source)}。GD Studio 音源只接管网易云（wy）。`,
     );
   }
   return policy;
@@ -289,9 +274,7 @@ const normaliseCandidate = (raw) => {
     name,
     singer: joinArtists(raw.artist ?? raw.singer),
     album: textOrEmpty(raw.album),
-    ...(seconds > 0 ? { interval: seconds, durationMs: Math.round(seconds * 1000) } : {}),
-    picId: textOrEmpty(raw.pic_id),
-    lyricId: textOrEmpty(raw.lyric_id),
+    ...(seconds > 0 ? { interval: seconds } : {}),
   };
 };
 
@@ -299,17 +282,6 @@ const normaliseCandidates = (list) =>
   (Array.isArray(list) ? list : [])
     .map(normaliseCandidate)
     .filter((candidate) => candidate !== null);
-
-/** 交给宿主的候选只保留稳定标识与展示字段，播放地址和歌词按需再取。 */
-const toHostCandidate = (candidate) => ({
-  id: candidate.id,
-  name: candidate.name,
-  ...(candidate.singer ? { singer: candidate.singer } : {}),
-  ...(candidate.album ? { album: candidate.album } : {}),
-  ...(candidate.durationMs ? { durationMs: candidate.durationMs } : {}),
-  ...(candidate.picId ? { picId: candidate.picId } : {}),
-  ...(candidate.lyricId ? { lyricId: candidate.lyricId } : {}),
-});
 
 const createResolutionCore = () => {
   let session;
@@ -333,7 +305,6 @@ const createResolutionCore = () => {
       quality: readQualitySetting(),
       smartCache: enabledSetting("smartCache", true),
       economyMode: enabledSetting("economyMode", false),
-      metadataFallback: enabledSetting("metadataFallback", true),
       crossPlatformFallback: enabledSetting("crossPlatformFallback", true),
       playableFirst: enabledSetting("playableFirst", false),
       verifyDelivery: enabledSetting("verifyDelivery", true),
@@ -345,7 +316,6 @@ const createResolutionCore = () => {
         signature,
         responses: new Map(),
         pending: new Map(),
-        actionPending: new Map(),
         channelCooldowns: new Map(),
         unavailableTracks: new Map(),
         probes: new Map(),
@@ -539,13 +509,9 @@ const createResolutionCore = () => {
 
   const isOperationalError = (error) => error?.code === NETWORK_ERROR;
 
-  const deadlineMessage = (kind) =>
-    kind === "url"
-      ? "SPlayer 播放地址解析已达到时间上限。"
-      : "读取歌词、封面或搜索结果已超过时间上限。";
+  const deadlineMessage = () => "SPlayer 播放地址解析已达到时间上限。";
 
-  const deadlineError = (kind) =>
-    pluginError(kind === "url" ? RESOLUTION_TIMEOUT_ERROR : METADATA_TIMEOUT_ERROR, deadlineMessage(kind));
+  const deadlineError = () => pluginError(RESOLUTION_TIMEOUT_ERROR, deadlineMessage());
 
   const limitError = () =>
     pluginError(
@@ -621,11 +587,11 @@ const createResolutionCore = () => {
     }
     if (Number.isFinite(deadline)) {
       const remaining = deadline - Date.now();
-      if (remaining <= 0) throw deadlineError(kind);
+      if (remaining <= 0) throw deadlineError();
       timeout = Math.min(timeout, Math.max(1, remaining));
     }
 
-    const timeoutCode = kind === "url" ? RESOLUTION_TIMEOUT_ERROR : METADATA_TIMEOUT_ERROR;
+    const timeoutCode = RESOLUTION_TIMEOUT_ERROR;
     let response;
     try {
       response = await requestWithTimeout(
@@ -637,13 +603,11 @@ const createResolutionCore = () => {
     } catch (error) {
       if (isHostCancellationError(error)) throw error;
       if (
-        [RESOLUTION_TIMEOUT_ERROR, METADATA_TIMEOUT_ERROR, CROSS_PLATFORM_LIMIT_ERROR].includes(
-          String(error?.code),
-        )
+        [RESOLUTION_TIMEOUT_ERROR, CROSS_PLATFORM_LIMIT_ERROR].includes(String(error?.code))
       ) {
         throw error;
       }
-      if (isHostRequestTimeoutError(error)) throw deadlineError(kind);
+      if (isHostRequestTimeoutError(error)) throw deadlineError();
       throw pluginError(
         NETWORK_ERROR,
         `GD Studio 网络请求失败：${error?.message ?? error}`,
@@ -682,7 +646,7 @@ const createResolutionCore = () => {
 
     // 缓存命中不消耗请求预算，但仍要遵守总时限。
     if (Number.isFinite(context.deadline) && Date.now() >= context.deadline) {
-      throw deadlineError(context.kind);
+      throw deadlineError();
     }
     if (context.budget && Date.now() >= context.budget.deadline) throw limitError();
 
@@ -816,7 +780,6 @@ const createResolutionCore = () => {
     isHostCancellationError(error) ||
     [
       RESOLUTION_TIMEOUT_ERROR,
-      METADATA_TIMEOUT_ERROR,
       CROSS_PLATFORM_LIMIT_ERROR,
       RATE_LIMIT_ERROR,
       CHANNEL_COOLDOWN_ERROR,
@@ -1075,163 +1038,36 @@ const createResolutionCore = () => {
     return { ...result };
   };
 
-  /**
-   * musicSearch 两种用法：
-   * - 独立来源（JOOX）：分页返回曲库结果，供搜索页与入队使用。
-   * - 内置来源（网易云）：只用于歌词、封面等元数据匹配，只提供第一页。
-   */
-  const searchMusic = async ({ source, keyword, page = 1, limit = SEARCH_RESULT_LIMIT }) => {
-    const policy = getSourcePolicy(source);
-    const state = getSession();
-    const query = textOrEmpty(keyword).slice(0, SEARCH_KEYWORD_MAX_LENGTH);
-    if (!query) return { list: [] };
-
-    const pageNumber = Number.isInteger(page) && page > 0 ? page : 1;
-    const pageSize = Number.isInteger(limit)
-      ? Math.max(1, Math.min(limit, SEARCH_PAGE_LIMIT))
-      : SEARCH_RESULT_LIMIT;
-    const deadline = Date.now() + METADATA_TIME_BUDGET;
-
-    if (!policy.catalog) {
-      if (!state.config.metadataFallback || pageNumber !== 1) return { list: [] };
-      const candidates = await searchRaw(source, query, {
-        state,
-        deadline,
-        page: 1,
-        count: Math.min(pageSize, SEARCH_RESULT_LIMIT),
-      });
-      assertCurrentSession(state);
-      return {
-        list: candidates.slice(0, Math.min(pageSize, SEARCH_RESULT_LIMIT)).map(toHostCandidate),
-      };
-    }
-
-    // GD Studio 对 JOOX 忽略 count/pages，对网易云遵守；多取一些再按页切，保证翻页不重复。
-    const fetchCount = Math.min(pageNumber * pageSize, SEARCH_PAGE_LIMIT);
-    const candidates = await searchRaw(source, query, {
-      state,
-      deadline,
-      page: 1,
-      count: fetchCount,
-    });
-    assertCurrentSession(state);
-    const start = (pageNumber - 1) * pageSize;
-    return {
-      list: candidates.slice(start, start + pageSize).map(toHostCandidate),
-      hasMore: candidates.length > start + pageSize,
-    };
-  };
-
-  const requestAction = async (params, state) =>
-    sharePending(state, state.actionPending, requestKey(params), () =>
-      requestJson(params, {
-        state,
-        kind: params.types,
-        deadline: Date.now() + METADATA_TIME_BUDGET,
-      }),
-    );
-
-  return { resolve, searchMusic, requestAction, getSession };
+  return { resolve };
 };
 
 const resolutionImplementation = createResolutionCore();
-const {
-  resolve: resolveTrack,
-  searchMusic: searchMusicCatalog,
-  requestAction: requestMusicAction,
-  getSession: getResolutionSession,
-} = resolutionImplementation;
+const { resolve: resolveTrack } = resolutionImplementation;
 
 const resolveUrl = async ({ source, quality, musicInfo }) => {
   const id = getMusicId(source, musicInfo);
   return resolveTrack({ source, quality, id, track: musicInfo });
 };
 
-const getLyric = async ({ source, musicInfo }) => {
-  const policy = getSourcePolicy(source);
-  const id = getMusicId(source, musicInfo);
-  const state = getResolutionSession();
-  if (!state.config.metadataFallback) return { lyric: "" };
-
-  const lyricId = textOrEmpty(musicInfo?.lyricId) || id;
-  const body = await requestMusicAction(
-    { types: "lyric", source: policy.apiSource, id: lyricId },
-    state,
-  );
-  const lyric = textOrEmpty(body?.lyric);
-  // 网易云对无歌词的曲目会返回占位文本，交给宿主继续尝试其它候选。
-  if (!lyric || /暂无歌词/.test(lyric)) return { lyric: "" };
-
-  const result = { lyric };
-  const tlyric = textOrEmpty(body?.tlyric);
-  const rlyric = textOrEmpty(body?.rlyric);
-  if (tlyric) result.tlyric = tlyric;
-  if (rlyric) result.rlyric = rlyric;
-  return result;
-};
-
-const getCover = async ({ source, musicInfo }) => {
-  const policy = getSourcePolicy(source);
-  const supplied = [
-    musicInfo?.cover,
-    musicInfo?.picUrl,
-    musicInfo?.img,
-    musicInfo?.album?.picUrl,
-  ].find((value) => typeof value === "string" && /^https?:\/\//i.test(value));
-  if (supplied) return { url: supplied };
-
-  const id = getMusicId(source, musicInfo);
-  const state = getResolutionSession();
-  if (!state.config.metadataFallback) return { url: "" };
-
-  const picId = textOrEmpty(musicInfo?.picId) || id;
-  const body = await requestMusicAction(
-    { types: "pic", source: policy.apiSource, id: picId, size: 500 },
-    state,
-  );
-  const url = extractUrlValue(body);
-  return { url: /^https?:\/\//i.test(url) ? url : "" };
-};
-
-const extractUrlValue = (body) => {
-  for (const container of [body, body?.data, body?.result]) {
-    if (!isRecord(container)) continue;
-    for (const key of ["url", "cover", "picUrl", "coverUrl"]) {
-      const value = container[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return "";
-};
-
-// musicLyric / musicPic 与播放解析共用同一份会话，配置变化时一起失效。
-
-const searchMetadata = async (input) => searchMusicCatalog(input);
-
 const createRuntimeAdapter = (runtime) => ({
   register(metadata) {
     runtime.register(metadata);
   },
-  bind({ musicUrl, musicLyric, musicPic, musicSearch }) {
+  bind({ musicUrl }) {
     runtime.on("musicUrl", musicUrl);
-    runtime.on("musicLyric", musicLyric);
-    runtime.on("musicPic", musicPic);
-    runtime.on("musicSearch", musicSearch);
   },
 });
 
 const runtimeAdapter = createRuntimeAdapter(splayer);
 runtimeAdapter.register({
-  sources: Object.fromEntries(
-    Object.entries(SOURCE_POLICIES).map(([source, policy]) => [
-      source,
-      {
-        name: policy.name,
-        actions: ["musicUrl", "musicLyric", "musicPic", "musicSearch"],
-        qualities: QUALITY_NAMES,
-      },
-    ]),
-  ),
+  sources: {
+    // 只注册内置网易云：曲目仍由 SPlayer 官方搜索产生，插件只补播放地址。
+    wy: {
+      name: SOURCE_POLICIES.wy.name,
+      actions: ["musicUrl"],
+      qualities: QUALITY_NAMES,
+    },
+  },
   settings: [
     {
       key: QUALITY_SETTING,
@@ -1262,7 +1098,7 @@ runtimeAdapter.register({
       type: "switch",
       label: "智能请求复用",
       description:
-        "合并相同播放请求；缓存搜索结果、歌词、封面与短期有效的播放地址，短暂跳过明确不可用的音质。仅保存在内存，切换配置会清空。",
+        "合并相同播放请求；缓存跨平台搜索结果与短期有效的播放地址，短暂跳过明确不可用的音质。仅保存在内存，切换配置会清空。",
       default: true,
     },
     {
@@ -1289,19 +1125,6 @@ runtimeAdapter.register({
         "只尝试目标音质与 128k；跨平台每个平台最多一个候选、最多三次请求。可能错过中间音质或可播版本。",
       default: false,
     },
-    {
-      key: "metadataFallback",
-      type: "switch",
-      label: "允许为歌词和封面额外请求",
-      description:
-        "关闭后不再为歌词、封面和元数据匹配调用 GD Studio；独立 JOOX 搜索不受影响。",
-      default: true,
-    },
   ],
 });
-runtimeAdapter.bind({
-  musicUrl: resolveUrl,
-  musicLyric: getLyric,
-  musicPic: getCover,
-  musicSearch: searchMetadata,
-});
+runtimeAdapter.bind({ musicUrl: resolveUrl });

@@ -142,26 +142,6 @@ test("cools down a platform that answers 503 and then skips it", async () => {
   assert.equal(neteaseCalls, 1);
 });
 
-test("falls back from JOOX to NetEase in the other direction", async () => {
-  const { handlers, requests } = loadPlugin({
-    settings: { quality: "hq" },
-    route: createRoute({
-      searches: { "netease:晴天 周杰倫": [track("w1", "晴天", ["周杰倫"])] },
-      urls: { "netease:w1:320": url("https://cdn.example.test/netease.mp3", 320) },
-    }),
-  });
-
-  const result = await handlers.musicUrl({
-    source: "joox",
-    quality: "hq",
-    musicInfo: { id: "j9", name: "晴天", singer: "周杰倫" },
-  });
-
-  assert.equal(result.url, "https://cdn.example.test/netease.mp3");
-  assert.deepEqual(requestTypes(requests).slice(-2), ["search:netease", "url:netease"]);
-  assert.equal(requests.at(-1).url.searchParams.get("id"), "w1");
-});
-
 test("stops probing after a 429 and reuses the cooldown", async () => {
   const { handlers, requests } = loadPlugin({
     route: () => ({

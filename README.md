@@ -3,57 +3,53 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Plugin](https://img.shields.io/badge/SPlayer--Next-source%20plugin-07c160.svg)](https://github.com/SPlayer-Dev/SPlayer-Next)
 
-> **让 SPlayer-Next 用 [GD 音乐台](https://music.gdstudio.xyz/) 的公开 API 播放网易云与 JOOX 的歌曲：母带、无损、320k 逐档尝试，地址打不开自动降档，主渠道没有版权时去另一个平台找同一首。**
+> **官方接口拿不到网易云的播放地址时，用 [GD 音乐台](https://music.gdstudio.xyz/) 接管；默认请求 hi-res，歌词和封面继续用官方。**
 
-一个可导入 [SPlayer-Next](https://github.com/SPlayer-Dev/SPlayer-Next) 的原生 `source` 音源插件，基于 [GD Studio 在线音乐 API](https://music-api.gdstudio.xyz/api.php) 解析网易云（`wy`）与 JOOX 的播放地址、歌词和封面，并提供「GD Studio 网易云曲库」「GD Studio JOOX 曲库」两个独立曲库，用来直接替代 SPlayer 内置音源。**不需要 API Key。**
-
-## v1.1.0 更新
-
-- 新增「**GD Studio 网易云曲库**」独立来源：搜索页切到「插件」并选择它之后，搜索与播放**完全由插件提供**，不再经过 SPlayer 官方接口 —— 这才是真正意义上的「替换 SPlayer 音源」。
-- 新增**插件音质选择**，默认 `hi-res`。以前插件会跟着播放器的音质档位走（SPlayer 默认 `hq`），所以最多只能拉到 HQ；现在插件按自己的档位请求，只有选 `auto` 才跟随播放器。
-- `hi-res` 请求会先试 999（24bit 无损）再逐级降档；GD Studio 对网易云的 740/999 返回同一个文件，实际音质仍按响应 `br` 上报。
+一个可导入 [SPlayer-Next](https://github.com/SPlayer-Dev/SPlayer-Next) 的原生 `source` 音源插件，只注册内置来源 `wy` 的 `musicUrl`。当 SPlayer 官方网易云接口返回不可用、仅试听或没有版权时，插件按官方曲目 ID 调用 [GD Studio 在线音乐 API](https://music-api.gdstudio.xyz/api.php) 解析播放地址，逐档匹配音质并做交付体检。**不提供搜索曲库，也不接管歌词和封面。不需要 API Key。**
 
 ---
 
-## 它解决什么问题
+## v1.2.0 更新
 
-| 你遇到的 | 插件怎么做 |
+- 移除「GD Studio 网易云曲库」「GD Studio JOOX 曲库」两个搜索入口，搜索页只保留 SPlayer 自带来源。
+- 移除 GD 歌词、封面与元数据搜索：歌词和封面完全使用官方数据。
+- 只注册 `wy` 的 `musicUrl`。插件被调用时直接用官方曲目的 ID 向 GD Studio 要地址，不再搜索、不产生额外曲目。
+- 插件音质选择保留，默认 `hi-res`；跨平台兜底、交付体检、缓存与限流保持不变。
+
+## 它能做什么、不能做什么
+
+| 场景 | 结果 |
 | --- | --- |
-| 会员歌曲、无损歌曲放不出来 | 按插件音质（默认 hi-res）逐档调用 `types=url`，`hi-res → lossless → hq → sq → lq`，命中即返回 |
-| 服务端给了地址，播放器却打不开 | **交付体检**：返回前先用 `Range: bytes=0-3` 确认地址真能拉流，打不开就自动降一档 |
-| 请求了 999 却拿到低码率文件 | 按响应体里的实际 `br` 上报音质，不照抄请求档位 |
-| 网易云没有版权的歌 | 按歌名、歌手去 JOOX 搜同一首，改用那边的 ID 解析；JOOX 不可用时反向兜底 |
-| 连续解析把请求额度打光 | 结果缓存 + 429 限流冷却 + 上游 5xx 通道熔断 |
-| 歌词、封面缺失 | 通过 `types=lyric` / `types=pic` 兜底，并复用搜索候选里的 `lyric_id`、`pic_id` |
-| 想直接搜 JOOX 的歌 | 注册独立来源 `joox`，出现在搜索页的「插件」入口 |
+| 官方接口返回完整地址 | 直接播放官方地址，**插件不会被调用**（宿主固定顺序） |
+| 官方接口返回不可用 / 仅试听 / 无版权 | 插件接管，返回 GD Studio 的地址（默认 hi-res） |
+| 歌词、封面 | 始终使用官方 |
+| 搜索、收藏、歌单 | 使用 SPlayer 官方曲目；插件不再提供独立曲库 |
+
+> **想让官方歌曲也走 GD Studio？** 请把 SPlayer 的音质设置为 **Hi-Res**（设置 → 播放 → 音质）。官方接口在拿不到该档位时会返回不可用，宿主随后调用本插件，插件再按 GD Studio 的 hi-res 档解析。插件自身的音质默认也是 `hi-res`，不会降级。
+
+SPlayer-Next 的插件 API 没有“插件优先于官方接口”的开关，也没有“只替换地址、保留曲目身份”的接口；官方成功时插件无法插入。这是宿主行为，不是插件可以绕过的限制。
 
 ## 30 秒上手
 
 1. 下载 [`dist/gdstudio.splayer-source.js`](./dist/gdstudio.splayer-source.js)
 2. 打开 SPlayer-Next → **设置 → 插件管理 → 本地导入**，选择该文件
-3. 回搜索页正常播放网易云歌曲即可（官方接口拿不到地址时插件兜底）
-4. 想完全替换 SPlayer 音源：搜索页切到「插件」→ 来源选「GD Studio 网易云曲库」或「GD Studio JOOX 曲库」，搜索与播放都只经过 GD Studio
-5. 想让插件少拉大文件：插件设置 → 插件音质 → 选 `hq` / `auto`
+3. 打开 **设置 → 播放 → 音质**，选择 **Hi-Res**（关键一步，见上一节）
+4. 正常播放官方搜索或收藏里的网易云歌曲；官方拿不到 hi-res 时插件会自动接管
+5. 想限制插件拉取的音质：插件设置 → 插件音质 → 选 `hq` / `lossless` 等
 
-> 插件不会改变 SPlayer-Next 的解析顺序：官方接口先解析，官方拿不到完整地址时才轮到本插件。详见 [何时会走插件](#何时会走插件)。
+判断是否接管成功：日志里会出现 `《歌名》已由GD Studio 网易云解析，交付音质 hi-res。`；如果没有任何 `[plugin:gdstudio.splayer-source]` 行，说明官方已经给出了可用地址。
 
 ## 支持范围
 
 | SPlayer 来源 | source key | GD Studio `source` | 能力 |
 | --- | --- | --- | --- |
-| 网易云音乐 | `wy`（内置来源） | `netease` | 官方接口失败时的播放地址、歌词、封面、元数据搜索 |
-| GD Studio 网易云曲库 | `gdstudio`（独立来源） | `netease` | 在「插件」中搜索网易云曲库并播放，**不经过官方接口** |
-| GD Studio JOOX 曲库 | `joox`（独立来源） | `joox` | 在「插件」中搜索 JOOX 曲库并播放 |
+| 网易云音乐 | `wy`（内置来源） | `netease` | 官方失败时补播放地址；歌词、封面仍用官方 |
 
-前两个来源共用 GD Studio 的网易云接口，区别只在入口：`wy` 是官方解析的后备，`gdstudio` 则是直接替代官方搜索的独立曲库。
-
-GD Studio 文档还列出 `tencent`、`kuwo`、`tidal`、`qobuz`、`apple`、`ytmusic`、`spotify`、`bilibili`。实测（2026-10-29）：`tencent` / `kuwo` / `tidal` / `qobuz` / `apple` / `ytmusic` 的搜索接口返回 HTTP 400 `Value of source is not supported.`，`spotify` 返回 503 维护页，`bilibili` 搜索返回空数组，因此本插件没有注册它们。接口恢复后可在 `SOURCE_POLICIES` 里加一条策略即可接入。
+GD Studio 文档还列出 `joox`、`tencent`、`kuwo`、`tidal`、`qobuz`、`apple`、`ytmusic`、`spotify`、`bilibili`。实测（2026-10-29）：`tencent` / `kuwo` / `tidal` / `qobuz` / `apple` / `ytmusic` 返回 HTTP 400，`spotify` 返回 503 维护页，`bilibili` 搜索为空。`joox` 只作为插件内部的跨平台兜底目标使用，不在搜索页注册。
 
 ## 音质
 
-插件设置里的**插件音质**决定起始档位（默认 `hi-res`），播放器自带的音质设置不会限制插件；只有把它设为 `auto` 时才跟随播放器的音质档位。所以默认情况下即使播放器选的是 HQ，插件也会先尝试无损档，再逐级降档。
-
-SPlayer 的逻辑音质映射到 GD Studio 的 `br` 参数：
+插件设置里的**插件音质**决定起始档位（默认 `hi-res`），播放器传入的音质不会限制插件；只有把插件音质设为 `auto` 时才跟随播放器。
 
 | SPlayer 音质 | 请求 `br` | 说明 |
 | --- | --- | --- |
@@ -105,39 +101,31 @@ SPlayer 的逻辑音质映射到 GD Studio 的 `br` 参数：
 
 ## 跨平台兜底
 
-SPlayer 的搜索结果会携带来源标识，插件不会根据歌名猜平台：
+当网易云整条音质阶梯都没有地址，或返回 `502/503/504` 上游故障，且 `crossPlatformFallback` 开启时：
 
-| SPlayer 来源 | 主渠道 | 兜底目标 |
-| --- | --- | --- |
-| `wy` | 网易云（netease） | JOOX |
-| `joox` | JOOX | 网易云（netease） |
-
-当主渠道整条音质阶梯都没有地址，或返回 `502/503/504` 上游故障，且 `crossPlatformFallback` 开启时：
-
-1. 用去掉版本标记的歌名 + 第一位歌手搜索目标平台；
+1. 用去掉版本标记的歌名 + 第一位歌手搜索 JOOX；
 2. 按歌名、歌手校验候选，避免把 Live、Remix、翻唱当成原曲；
-3. 用目标平台自己的 ID 调用 `types=url`，不跨平台复用 ID；
+3. 用 JOOX 自己的 ID 调用 `types=url`，不跨平台复用 ID；
 4. 全程受 18 秒解析时间、最多 4 次请求、每个平台最多 2 个候选的限制。
 
 候选歌名必须在规范化后相同（忽略大小写、空白和标点）。这里有一个**单向**的宽松匹配：如果原曲自己的标题带版本标记（如 `Love (Live)`），而候选是干净标题（`Love`），则视为同一首歌；反向不成立——原曲标题干净时，带 `(Live)`、`(Remix)` 等标记的候选仍会被拒绝。
 
-GD Studio 的搜索项**没有时长字段**，因此跨平台匹配只能依据歌名与歌手；宿主传入的 `interval` 只在候选恰好带时长时参与校验。
+> 2026-10-29 实测 JOOX 播放通道返回空地址，跨平台兜底目前多半会失败，失败时保留原始错误。
 
 ## 省请求配置
 
 | 配置 | 默认 | 行为与取舍 |
 | --- | --- | --- |
 | 插件音质（`quality`） | `hi-res` | 插件按此档位请求并从该档降级；`auto` 表示跟随播放器音质。选 `hq` 时最多只拉 320k |
-| 跨平台兜底（`crossPlatformFallback`） | 开启 | 主渠道无版权或上游故障时去另一个平台找同一首 |
-| 智能请求复用（`smartCache`） | 开启 | 合并相同并发播放请求，复用搜索结果、歌词、封面与 90 秒内的播放地址 |
+| 跨平台兜底（`crossPlatformFallback`） | 开启 | 网易云无版权或上游故障时去 JOOX 找同一首 |
+| 智能请求复用（`smartCache`） | 开启 | 合并相同并发播放请求，复用搜索结果与 90 秒内的播放地址 |
 | 交付体检（`verifyDelivery`） | 开启 | 返回地址前取前几个字节确认能拉流，打不开就降一档 |
 | 可播放优先（`playableFirst`） | 关闭 | 默认无损优先；打开后先取 320k / 192k / 128k |
-| 省请求模式（`economyMode`） | 关闭 | 只试目标音质与 128k；跨平台每个平台 1 个候选、最多 3 次请求 |
-| 元数据额外请求（`metadataFallback`） | 开启 | 关闭后不再为歌词、封面和元数据匹配调用接口；独立 JOOX 搜索不受影响 |
+| 省请求模式（`economyMode`） | 关闭 | 只试目标音质与 128k；跨平台最多 3 次请求 |
 
 **缓存与冷却的边界**
 
-- 播放地址没有明确的过期时间，只缓存 90 秒，避免把过期链接留给下一次播放；搜索结果缓存 5 分钟，空搜索结果缓存 60 秒，歌词与封面缓存 5 分钟。
+- 播放地址没有明确的过期时间，只缓存 90 秒，避免把过期链接留给下一次播放；搜索结果缓存 5 分钟，空搜索结果缓存 60 秒。
 - 明确"整条音质阶梯都没有地址"的歌曲按 5 分钟记住，期间直接进入跨平台匹配（省请求模式不记）。
 - 命中 `429` 按 `Retry-After` 进入冷却（没有该响应头时按 60 秒，最长 15 分钟）；冷却期内直接返回 `GD_RATE_LIMITED` 且**不发出任何请求**。
 - `502/503/504` 冷却对应平台 2 分钟（优先 `Retry-After`，最长 15 分钟）；冷却期内主渠道直接跳过，必要时走兜底。
@@ -146,26 +134,27 @@ GD Studio 的搜索项**没有时长字段**，因此跨平台匹配只能依据
 ## 解析流程
 
 ```text
-SPlayer 内置搜索结果（wy / joox）
-        ↓
-读取 musicInfo 的平台 ID
-        ↓
-types=url&source=netease|joox&id=...&br=999|740|320|192|128
-        ↓
-交付体检（Range 探测）
-        ↓
-返回 { url, quality }
+SPlayer 官方接口解析网易云曲目
+        ├─ 成功 → 直接播放官方地址（插件不参与，歌词/封面/收藏均为官方）
+        └─ 不可用 / 仅试听 / 无版权
+                ↓
+        插件按 musicInfo 的 songId 调用
+        types=url&source=netease&id=...&br=999|740|320|192|128
+                ↓
+        交付体检（Range 探测） → 返回 { url, quality }
+                ↓
+        曲目仍是官方网易云曲目，歌词与封面继续由官方提供
 ```
 
-### 何时会走插件
+### 为什么有时看不到插件生效
 
-SPlayer-Next 的解析顺序由宿主决定，插件无法改变：官方接口先解析；取得完整、非试听的地址就直接播放，只有官方接口返回不可用、仅 VIP 或仅试听时才调用音源插件。因此"非会员但有版权"并不是是否调用插件的判断条件：关键是官方接口是否返回了可用的完整地址。如果官方已返回低音质完整地址，插件不会被调用，也就无法升级音质。
+插件只负责补地址，不改变曲目来源。以下情况都不会调用插件：
 
-**想绕过这个顺序，就用独立曲库。** 搜索页切到「插件」后选择「GD Studio 网易云曲库」或「GD Studio JOOX 曲库」，搜到的曲目 `source` 是 `plugin`，播放器会直接向插件要地址，官方接口完全不参与——这就是本插件能提供的「替换 SPlayer 音源」。
+- 官方接口已经返回完整、非试听的地址；
+- 曲目来自本地、流媒体或其它平台；
+- 插件被禁用或未就绪。
 
-看日志可以确认：解析成功会有一行 `《歌名》已由 GD Studio 网易云解析，交付音质 …`；失败会有 `resolveUrl rejected`。两者都没有，说明官方接口已经给出可用地址、宿主根本没调用插件。
-
-日志位于 `app-data/logs/<日期>.log`，带 `[plugin:gdstudio.splayer-source]` 前缀。
+判断方法：日志里搜索 `[plugin:gdstudio.splayer-source]`。没有这行就说明宿主没有调用插件。
 
 ## 错误处理
 
@@ -181,22 +170,20 @@ SPlayer-Next 的解析顺序由宿主决定，插件无法改变：官方接口�
 | `GD_DELIVERY_UNUSABLE` | 整条阶梯的地址都通不过交付体检 |
 | `GD_NO_URL` | 该音质档位没有播放地址（整条阶梯都为空时抛出） |
 | `GD_TRACK_UNAVAILABLE` | 至少一个平台真正搜索过，但没有匹配到同一首歌 |
-| `GD_CROSS_PLATFORM_UNAVAILABLE` | 所有目标平台均未能完成搜索，附各通道状态 |
+| `GD_CROSS_PLATFORM_UNAVAILABLE` | 跨平台兜底未能完成搜索，附各通道状态 |
 | `GD_CROSS_PLATFORM_LIMIT` | 跨平台兜底达到请求或时间上限 |
-| `GD_NETWORK_ERROR` / `GD_REQUEST_TIMEOUT` / `GD_RESOLUTION_TIMEOUT` / `GD_METADATA_TIMEOUT` | 网络异常 / 请求超时 / 整体解析超时 / 元数据动作超时 |
+| `GD_NETWORK_ERROR` / `GD_REQUEST_TIMEOUT` / `GD_RESOLUTION_TIMEOUT` | 网络异常 / 请求超时 / 整体解析超时 |
 | `GD_INVALID_RESPONSE` | 接口返回的不是预期 JSON 结构 |
 | `GD_TRACK_INVALID` / `GD_SOURCE_UNSUPPORTED` | 缺少平台 ID / 不支持的音源 |
 | `GD_CONFIG_CHANGED` | 解析途中配置变化，需要重新播放 |
 
 ## 当前限制
 
-- GD Studio 目前只开放 `netease` 与 `joox`。QQ 音乐、酷狗、TIDAL、Qobuz、Apple Music、YouTube Music、Spotify 的接口返回 400，B 站搜索返回空数组，所以这些平台不可用。
-- JOOX 的搜索、歌词、封面可用，但播放地址在 2026-10-29 的实测中始终返回 `{"url":"","br":-1}`（含周杰伦《晴天》等主流曲目）。此时 JOOX 曲目会尝试兜底到网易云，找不到就报 `GD_NO_URL` / `GD_TRACK_UNAVAILABLE`。
-- GD Studio 搜索接口不返回时长，跨平台匹配只能依据歌名与歌手，仍可能匹配到翻唱或不同混音；匹配错误时可关闭兜底开关。
+- SPlayer-Next 没有“插件优先于官方接口”的设置；官方成功时插件无法接管，也没有只替换地址的接口。想要 GD 的地址，只能让官方在目标音质上失败（把播放器音质设为 Hi-Res），或使用带独立曲库的旧版本。
+- `hi-res` 请求会先试 999 档，网易云无损单曲实测 27–52MB；流量或设备吃不消时把插件音质改成 `hq` 或 `auto`。
+- JOOX 在 2026-10-29 的实测中播放地址始终为空（搜索/歌词/封面正常），因此跨平台兜底只在接口恢复后才有意义。
+- GD Studio 搜索接口不返回时长，跨平台匹配只能依据歌名与歌手，仍可能匹配到翻唱或不同混音。
 - 接口限流为 5 分钟内不超过 50 次请求，连续试听多首无版权歌可能触发 `GD_RATE_LIMITED`，等一分钟再试。
-- 返回的播放地址来自网易云 CDN，可能有时间限制；没有过期字段时插件只缓存 90 秒。
-- 插件音质默认 `hi-res`，网易云无损单曲实测 27–52MB；流量或设备吃不消时把插件音质改成 `hq` 或 `auto`。
-- 独立曲库的曲目由 `gdstudio` / `joox` 两个 source key 标识，与内置来源的 `wy` 互不影响；移除插件后队列中的插件歌曲会保留但无法播放。
 - 仅使用你有权访问和播放的音乐，并遵守 GD Studio、音乐平台及当地法律法规。
 
 ## 开发与测试
@@ -213,13 +200,12 @@ node scripts/check-artifact.mjs  # 产物可加载且能解析
 
 | 测试文件 | 覆盖 |
 | --- | --- |
-| `test/plugin.test.js` | 注册声明、音质选择与默认 hi-res、音质上报、交付体检、缓存、歌词、封面、错误处理 |
-| `test/search.test.js` | GD Studio 网易云 / JOOX 曲库分页、候选字段、关键词截断、元数据搜索、错误响应 |
-| `test/fallback.test.js` | 双向跨平台匹配、版本标记规则、503 冷却、429 限流 |
+| `test/plugin.test.js` | 注册声明、音质选择与默认 hi-res、音质上报、交付体检、缓存、错误处理 |
+| `test/fallback.test.js` | 跨平台匹配、版本标记规则、503 冷却、429 限流 |
 | `test/quota.test.js` | 省请求模式、可播放优先、不可用记忆、缓存过期、超时与网络错误映射 |
 | `test/release-seam.test.js` | 源码/产物字节一致、CI 步骤、产物冒烟 |
 
-测试宿主 `test/plugin-host.js` 只注入文档列出的 `splayer`、`URL`、`Promise`、`setTimeout`、`Date` 等全局对象，并按宿主的方式序列化处理器结果，用来模拟真实的插件边界。
+测试宿主 `test/plugin-host.js` 只注入文档列出的 `splayer`、`URL`、`Promise`、`setTimeout`、`Date` 等全局对象，并按宿主的方式序列化处理器结果。
 
 ## 发布到 SPlayer 插件市场
 

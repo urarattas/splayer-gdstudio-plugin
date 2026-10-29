@@ -19,14 +19,11 @@ try {
       urls: { "netease:release-seam:999": url("https://cdn.example.test/release-seam.flac", 842) },
     }),
   });
-  const actions = ["musicUrl", "musicLyric", "musicPic", "musicSearch"];
   const qualities = ["lq", "sq", "hq", "lossless", "hi-res"];
 
-  assert.deepEqual(Object.keys(registration.sources), ["wy", "gdstudio", "joox"]);
-  for (const source of Object.values(registration.sources)) {
-    assert.deepEqual([...source.actions], actions);
-    assert.deepEqual([...source.qualities], qualities);
-  }
+  assert.deepEqual(Object.keys(registration.sources), ["wy"]);
+  assert.deepEqual([...registration.sources.wy.actions], ["musicUrl"]);
+  assert.deepEqual([...registration.sources.wy.qualities], qualities);
   assert.equal(registration.settings[0].key, "quality");
   assert.equal(registration.settings[0].default, "hi-res");
   assert.equal(typeof handlers.musicUrl, "function");

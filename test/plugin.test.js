@@ -13,16 +13,17 @@ const neteaseTrack = {
 test("registers NetEase and JOOX capabilities with the documented actions", () => {
   const { registration, handlers } = loadPlugin();
 
-  assert.deepEqual(Object.keys(registration.sources), ["wy", "gdstudio", "joox"]);
-  for (const source of Object.values(registration.sources)) {
-    assert.deepEqual([...source.actions], ["musicUrl", "musicLyric", "musicPic", "musicSearch"]);
-    assert.deepEqual([...source.qualities], ["lq", "sq", "hq", "lossless", "hi-res"]);
-  }
+  assert.deepEqual(Object.keys(registration.sources), ["wy"]);
+  const source = registration.sources.wy;
+  assert.deepEqual([...source.actions], ["musicUrl"]);
+  assert.deepEqual([...source.qualities], ["lq", "sq", "hq", "lossless", "hi-res"]);
+  assert.equal(source.name, "GD Studio 网易云");
   assert.equal(registration.settings[0].key, "quality");
   assert.equal(registration.settings[0].default, "hi-res");
-  for (const action of ["musicUrl", "musicLyric", "musicPic", "musicSearch"]) {
-    assert.equal(typeof handlers[action], "function");
-  }
+  assert.equal(typeof handlers.musicUrl, "function");
+  assert.equal(handlers.musicLyric, undefined);
+  assert.equal(handlers.musicPic, undefined);
+  assert.equal(handlers.musicSearch, undefined);
 });
 
 test("resolves a NetEase track at the requested bitrate and probes the delivery", async () => {
@@ -188,70 +189,6 @@ test("throws GD_NO_URL after the whole ladder is empty when fallback is off", as
   assert.equal(requests.length, 4);
 });
 
-test("returns lyric and translation, using the lyric id from the candidate", async () => {
-  const { handlers, requests } = loadPlugin({
-    route: createRoute({
-      lyrics: {
-        "netease:lyric-42": { lyric: "[00:01.00]hello", tlyric: "[00:01.00]你好" },
-      },
-    }),
-  });
-
-  const result = await handlers.musicLyric({
-    source: "wy",
-    musicInfo: { ...neteaseTrack, lyricId: "lyric-42" },
-  });
-
-  const params = requests[0].url.searchParams;
-  assert.equal(params.get("types"), "lyric");
-  assert.equal(params.get("source"), "netease");
-  assert.equal(params.get("id"), "lyric-42");
-  assert.equal(result.lyric, "[00:01.00]hello");
-  assert.equal(result.tlyric, "[00:01.00]你好");
-});
-
-test("treats the NetEase placeholder lyric as empty", async () => {
-  const { handlers } = loadPlugin({
-    route: createRoute({ lyrics: { "netease:18902710": { lyric: "[00:00.00]暂无歌词", tlyric: "" } } }),
-  });
-
-  const result = await handlers.musicLyric({ source: "wy", musicInfo: neteaseTrack });
-  assert.equal(result.lyric, "");
-});
-
-test("returns a cover from the pic endpoint and honours a supplied cover", async () => {
-  const { handlers, requests } = loadPlugin({
-    route: createRoute({
-      pics: { "netease:pic-99": { url: "https://img.example.test/99.jpg" } },
-    }),
-  });
-
-  const fetched = await handlers.musicPic({
-    source: "wy",
-    musicInfo: { ...neteaseTrack, picId: "pic-99" },
-  });
-  assert.equal(fetched.url, "https://img.example.test/99.jpg");
-  assert.equal(requests[0].url.searchParams.get("size"), "500");
-
-  const supplied = await handlers.musicPic({
-    source: "wy",
-    musicInfo: { ...neteaseTrack, img: "https://img.example.test/from-host.jpg" },
-  });
-  assert.equal(supplied.url, "https://img.example.test/from-host.jpg");
-  assert.equal(requests.length, 1);
-});
-
-test("skips lyric and cover requests when metadataFallback is off", async () => {
-  const { handlers, requests } = loadPlugin({ settings: { metadataFallback: false } });
-
-  const lyric = await handlers.musicLyric({ source: "wy", musicInfo: neteaseTrack });
-  const cover = await handlers.musicPic({ source: "wy", musicInfo: neteaseTrack });
-
-  assert.deepEqual(lyric, { lyric: "" });
-  assert.deepEqual(cover, { url: "" });
-  assert.equal(requests.length, 0);
-});
-
 test("rejects unsupported sources and missing track ids", async () => {
   const { handlers } = loadPlugin();
 
@@ -264,27 +201,6 @@ test("rejects unsupported sources and missing track ids", async () => {
     (error) => error.code === "GD_TRACK_INVALID",
   );
 });
-
-test("resolves a JOOX catalog track through its own source key", async () => {
-  const id = "MX14hTaB09S4XtuczK40Rg==";
-  const { handlers, requests } = loadPlugin({
-    settings: { quality: "hq" },
-    route: createRoute({ urls: { [`joox:${id}:320`]: url("https://cdn.example.test/joox.mp3", 320) } }),
-  });
-
-  const result = await handlers.musicUrl({
-    source: "joox",
-    quality: "hq",
-    musicInfo: { id, name: "love.", singer: "wave to earth" },
-  });
-
-  const params = requests[0].url.searchParams;
-  assert.equal(params.get("source"), "joox");
-  assert.equal(params.get("id"), id);
-  assert.equal(params.get("br"), "320");
-  assert.equal(result.quality, "hq");
-});
-
 
 test("defaults to hi-res even when the player requests hq", async () => {
   const { handlers, requests } = loadPlugin({
@@ -339,27 +255,7 @@ test("caps the requested quality at the selected setting", async () => {
   assert.equal(result.quality, "sq");
 });
 
-test("resolves the GD Studio NetEase catalog as an independent source", async () => {
-  const { handlers, requests } = loadPlugin({
-    settings: { quality: "hq" },
-    route: createRoute({
-      urls: { "netease:18902710:320": url("https://cdn.example.test/catalog.mp3", 320) },
-    }),
-  });
-
-  const result = await handlers.musicUrl({
-    source: "gdstudio",
-    quality: "hq",
-    musicInfo: { id: "18902710", name: "Love", singer: "Keyshia Cole" },
-  });
-
-  assert.equal(requests[0].url.searchParams.get("source"), "netease");
-  assert.equal(requests[0].url.searchParams.get("id"), "18902710");
-  assert.equal(result.url, "https://cdn.example.test/catalog.mp3");
-  assert.equal(result.quality, "hq");
-});
-
-test("runtime adapter reports the four registered actions", () => {
+test("runtime adapter binds only musicUrl", () => {
   const { createRuntimeAdapter } = loadPlugin();
   const bound = {};
   const registered = {};
@@ -374,13 +270,8 @@ test("runtime adapter reports the four registered actions", () => {
 
   const adapter = createRuntimeAdapter(runtime);
   adapter.register({ sources: { wy: { name: "x", actions: ["musicUrl"] } } });
-  adapter.bind({
-    musicUrl: () => "url",
-    musicLyric: () => "lyric",
-    musicPic: () => "pic",
-    musicSearch: () => "search",
-  });
+  adapter.bind({ musicUrl: () => "url" });
 
   assert.deepEqual(Object.keys(registered), ["sources"]);
-  assert.deepEqual(Object.keys(bound).sort(), ["musicLyric", "musicPic", "musicSearch", "musicUrl"]);
+  assert.deepEqual(Object.keys(bound), ["musicUrl"]);
 });

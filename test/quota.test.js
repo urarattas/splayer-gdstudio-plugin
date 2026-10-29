@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createRoute, loadPlugin, track, url } from "./plugin-host.js";
+import { createRoute, loadPlugin, url } from "./plugin-host.js";
 
 const neteaseTrack = {
   songmid: "18902710",
@@ -58,17 +58,19 @@ test("remembering an unavailable track skips its whole ladder next time", async 
   assert.equal(requests.length, firstRound);
 });
 
-test("expires cached search results after five minutes", async () => {
+test("expires cached playback URLs after ninety seconds", async () => {
   let clock = 1_800_000_000_000;
   const { handlers, requests } = loadPlugin({
     now: () => clock,
-    route: createRoute({ searches: { "joox:晴天": [track("j1", "晴天", "周杰倫")] } }),
+    route: createRoute({
+      urls: { "netease:18902710:999": url("https://cdn.example.test/song.flac", 842) },
+    }),
   });
 
-  const query = { source: "joox", keyword: "晴天" };
-  await handlers.musicSearch(query);
-  clock += 5 * 60_000 + 1;
-  await handlers.musicSearch(query);
+  const request = { source: "wy", quality: "hi-res", musicInfo: neteaseTrack };
+  await handlers.musicUrl(request);
+  clock += 90_000 + 1;
+  await handlers.musicUrl(request);
 
   assert.equal(requests.length, 2);
 });

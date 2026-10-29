@@ -1,8 +1,8 @@
 {
   "name": "splayer-gdstudio-plugin",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "SPlayer-Next 音源插件：GD Studio API 解析网易云 / JOOX 播放地址，逐档音质、交付体检与跨平台兜底 (GD Studio API source plugin for SPlayer-Next)",
+  "description": "SPlayer-Next 音源插件：官方网易云拿不到地址时用 GD Studio 接管播放地址，默认 hi-res，歌词封面保持官方 (GD Studio API source plugin for SPlayer-Next)",
   "license": "MIT",
   "type": "module",
   "scripts": {
