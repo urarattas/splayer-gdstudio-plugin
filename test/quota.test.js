@@ -44,7 +44,10 @@ test("playable-first puts lossless tiers at the end of the ladder", async () => 
 });
 
 test("remembering an unavailable track skips its whole ladder next time", async () => {
-  const { handlers, requests } = loadPlugin({ route: createRoute() });
+  const { handlers, requests } = loadPlugin({
+    settings: { quality: "lossless" },
+    route: createRoute(),
+  });
 
   const request = { source: "wy", quality: "lossless", musicInfo: neteaseTrack };
   await assert.rejects(handlers.musicUrl(request), (error) => error.code === "GD_TRACK_UNAVAILABLE");

@@ -120,6 +120,27 @@ test("rejects a search response that is neither an array nor a list object", asy
   });
 });
 
+
+test("serves the GD Studio NetEase catalog through the plugin search entry", async () => {
+  const { handlers, requests } = loadPlugin({
+    route: createRoute({
+      searches: { "netease:Love Keyshia Cole": [track("18902710", "Love", "Keyshia Cole")] },
+    }),
+  });
+
+  const { list } = await handlers.musicSearch({
+    source: "gdstudio",
+    keyword: "Love Keyshia Cole",
+    page: 1,
+    limit: 10,
+  });
+
+  assert.equal(requests[0].url.searchParams.get("source"), "netease");
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, "18902710");
+  assert.equal(list[0].singer, "Keyshia Cole");
+});
+
 test("reuses cached search results across identical queries", async () => {
   const { handlers, requests } = loadPlugin({
     route: createRoute({ searches: { "joox:晴天": jooxCatalog.slice(0, 3) } }),

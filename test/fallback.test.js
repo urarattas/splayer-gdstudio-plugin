@@ -102,7 +102,7 @@ test("rejects a candidate with a different artist", async () => {
 
 test("keeps failures local when cross-platform fallback is off", async () => {
   const { handlers, requests } = loadPlugin({
-    settings: { crossPlatformFallback: false },
+    settings: { crossPlatformFallback: false, quality: "hq" },
     route: createRoute({ searches: { "joox:Love Keyshia Cole": [track("j1", "Love", ["Keyshia Cole"])] } }),
   });
 
@@ -144,6 +144,7 @@ test("cools down a platform that answers 503 and then skips it", async () => {
 
 test("falls back from JOOX to NetEase in the other direction", async () => {
   const { handlers, requests } = loadPlugin({
+    settings: { quality: "hq" },
     route: createRoute({
       searches: { "netease:晴天 周杰倫": [track("w1", "晴天", ["周杰倫"])] },
       urls: { "netease:w1:320": url("https://cdn.example.test/netease.mp3", 320) },

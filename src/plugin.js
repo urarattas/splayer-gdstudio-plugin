@@ -1,13 +1,13 @@
 /**
  * @name        GD Studio 音源
  * @id          gdstudio.splayer-source
- * @version     1.0.0
+ * @version     1.1.0
  * @description 为 SPlayer-Next 提供网易云 / JOOX 的播放地址、歌词与封面：逐档解析音质、交付体检，无版权时跨平台兜底
  * @author      splayer-gdstudio-plugin
  * @type        source
  * @grant       network
  * @apiLevel    5
- * @changelog   首个版本：网易云与 JOOX 播放地址、歌词、封面，独立 JOOX 曲库搜索与跨平台兜底
+ * @changelog   新增 GD Studio 网易云独立曲库与插件音质选择（默认 hi-res）
  */
 
 const API_BASE_URL = "https://music-api.gdstudio.xyz/api.php";
@@ -99,8 +99,17 @@ const SOURCE_POLICIES = {
     identity: { idFields: ["id", "songId", "songmid"] },
     crossPlatform: ["joox"],
   },
+  // 独立曲库：用 GD Studio 的网易云曲库替换 SPlayer 内置来源。
+  // 从搜索页选择「GD Studio 网易云曲库」后，搜索与播放都只经过插件，不经过官方接口。
+  gdstudio: {
+    name: "GD Studio 网易云曲库",
+    apiSource: "netease",
+    catalog: true,
+    identity: { idFields: ["id", "songmid", "songId"] },
+    crossPlatform: ["joox"],
+  },
   joox: {
-    name: "GD Studio JOOX",
+    name: "GD Studio JOOX 曲库",
     apiSource: "joox",
     // 独立来源：声明 musicSearch 后出现在搜索页的「插件」入口。
     catalog: true,
@@ -108,6 +117,10 @@ const SOURCE_POLICIES = {
     crossPlatform: ["wy"],
   },
 };
+
+// 插件自己的音质选择：默认 hi-res，不再受播放器音质档位限制。
+const QUALITY_SETTING = "quality";
+const DEFAULT_PLUGIN_QUALITY = "hi-res";
 
 const isRecord = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -306,9 +319,18 @@ const createResolutionCore = () => {
     return value === undefined || value === null || value === "" ? fallback : value === true;
   };
 
+  // 插件音质选择独立于播放器设置：默认 hi-res，可选 auto 跟随播放器。
+  const readQualitySetting = () => {
+    const value = splayer.getSetting(QUALITY_SETTING);
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text === "auto") return "auto";
+    return QUALITY_NAMES.includes(text) ? text : DEFAULT_PLUGIN_QUALITY;
+  };
+
   // 新配置拥有一套新缓存。旧的在途请求无法写进新会话。
   const getSession = () => {
     const config = {
+      quality: readQualitySetting(),
       smartCache: enabledSetting("smartCache", true),
       economyMode: enabledSetting("economyMode", false),
       metadataFallback: enabledSetting("metadataFallback", true),
@@ -1037,15 +1059,17 @@ const createResolutionCore = () => {
 
   const resolve = async (input) => {
     const state = getSession();
-    const requestedQuality = QUALITY_NAMES.includes(input.quality) ? input.quality : "hq";
+    const hostQuality = QUALITY_NAMES.includes(input.quality) ? input.quality : "hq";
+    // 默认按插件设置请求；只有设置为 auto 时才跟随播放器的音质档位。
+    const targetQuality = state.config.quality === "auto" ? hostQuality : state.config.quality;
     const key = JSON.stringify([
       input.source,
       String(input.id),
-      requestedQuality,
+      targetQuality,
       getTrackDescriptor(input.track),
     ]);
     const result = await sharePending(state, state.pending, key, () =>
-      resolveUncached({ ...input, quality: requestedQuality }, state),
+      resolveUncached({ ...input, quality: targetQuality }, state),
     );
     assertCurrentSession(state);
     return { ...result };
@@ -1209,6 +1233,22 @@ runtimeAdapter.register({
     ]),
   ),
   settings: [
+    {
+      key: QUALITY_SETTING,
+      type: "select",
+      label: "插件音质（默认 hi-res）",
+      description:
+        "插件按这个档位请求播放地址，并从该档逐级降档；播放器自带的音质设置不会限制插件，只有选择 auto 才跟随它。GD Studio 的无损文件较大（实测单曲 27–52MB），介意流量或设备解码能力时可选 hq。",
+      default: DEFAULT_PLUGIN_QUALITY,
+      options: [
+        { label: "Hi-Res（24bit 无损，最大）", value: "hi-res" },
+        { label: "无损 Lossless", value: "lossless" },
+        { label: "HQ 320k", value: "hq" },
+        { label: "SQ 192k", value: "sq" },
+        { label: "LQ 128k", value: "lq" },
+        { label: "跟随播放器音质（auto）", value: "auto" },
+      ],
+    },
     {
       key: "crossPlatformFallback",
       type: "switch",

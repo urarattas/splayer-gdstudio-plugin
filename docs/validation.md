@@ -90,3 +90,13 @@ CDN 支持 Range，返回 206，插件按 2xx 视为可播放。
 - `musicUrl(joox, hq, 晴天)` 因 JOOX 播放通道为空、网易云又搜不到周杰伦原曲，返回 `GD_TRACK_UNAVAILABLE`。
 
 以上结果与单元测试中的模拟响应一致；未在已安装的 SPlayer-Next 中做整曲播放验收。
+
+## 8. v1.1.0：独立曲库与默认音质
+
+时间：2026-10-29 22:18（Asia/Shanghai），共 3 次请求：
+
+- `musicSearch(gdstudio, "Love Keyshia Cole")` 走 `source=netease`，返回带 `picId` / `lyricId` 的候选；
+- 用候选 ID 调用 `musicUrl(gdstudio, quality="hq")` 时，插件默认音质 `hi-res` 生效，实际只发出一次 `br=999` 请求；
+- 返回 1650kbps FLAC，交付体检通过，上报 `hi-res`，日志为 `《Love》已由GD Studio 网易云曲库解析，交付音质 hi-res。`。
+
+结论：`gdstudio` 独立曲库可以直接替代官方搜索；插件音质默认压过播放器传入的 `hq`，把插件音质设为 `auto` 时才恢复跟随播放器。

@@ -5,7 +5,13 @@
 
 > **让 SPlayer-Next 用 [GD 音乐台](https://music.gdstudio.xyz/) 的公开 API 播放网易云与 JOOX 的歌曲：母带、无损、320k 逐档尝试，地址打不开自动降档，主渠道没有版权时去另一个平台找同一首。**
 
-一个可导入 [SPlayer-Next](https://github.com/SPlayer-Dev/SPlayer-Next) 的原生 `source` 音源插件，基于 [GD Studio 在线音乐 API](https://music-api.gdstudio.xyz/api.php) 解析网易云（`wy`）与 JOOX 的播放地址、歌词和封面，并把 JOOX 注册为可搜索的独立曲库。**不需要 API Key。**
+一个可导入 [SPlayer-Next](https://github.com/SPlayer-Dev/SPlayer-Next) 的原生 `source` 音源插件，基于 [GD Studio 在线音乐 API](https://music-api.gdstudio.xyz/api.php) 解析网易云（`wy`）与 JOOX 的播放地址、歌词和封面，并提供「GD Studio 网易云曲库」「GD Studio JOOX 曲库」两个独立曲库，用来直接替代 SPlayer 内置音源。**不需要 API Key。**
+
+## v1.1.0 更新
+
+- 新增「**GD Studio 网易云曲库**」独立来源：搜索页切到「插件」并选择它之后，搜索与播放**完全由插件提供**，不再经过 SPlayer 官方接口 —— 这才是真正意义上的「替换 SPlayer 音源」。
+- 新增**插件音质选择**，默认 `hi-res`。以前插件会跟着播放器的音质档位走（SPlayer 默认 `hq`），所以最多只能拉到 HQ；现在插件按自己的档位请求，只有选 `auto` 才跟随播放器。
+- `hi-res` 请求会先试 999（24bit 无损）再逐级降档；GD Studio 对网易云的 740/999 返回同一个文件，实际音质仍按响应 `br` 上报。
 
 ---
 
@@ -13,7 +19,7 @@
 
 | 你遇到的 | 插件怎么做 |
 | --- | --- |
-| 会员歌曲、无损歌曲放不出来 | 按 SPlayer 音质逐档调用 `types=url`，`hi-res → lossless → hq → sq → lq`，命中即返回 |
+| 会员歌曲、无损歌曲放不出来 | 按插件音质（默认 hi-res）逐档调用 `types=url`，`hi-res → lossless → hq → sq → lq`，命中即返回 |
 | 服务端给了地址，播放器却打不开 | **交付体检**：返回前先用 `Range: bytes=0-3` 确认地址真能拉流，打不开就自动降一档 |
 | 请求了 999 却拿到低码率文件 | 按响应体里的实际 `br` 上报音质，不照抄请求档位 |
 | 网易云没有版权的歌 | 按歌名、歌手去 JOOX 搜同一首，改用那边的 ID 解析；JOOX 不可用时反向兜底 |
@@ -25,7 +31,9 @@
 
 1. 下载 [`dist/gdstudio.splayer-source.js`](./dist/gdstudio.splayer-source.js)
 2. 打开 SPlayer-Next → **设置 → 插件管理 → 本地导入**，选择该文件
-3. 回搜索页正常播放网易云歌曲；在搜索页来源下拉框里选择「GD Studio JOOX」可直接搜 JOOX 曲库
+3. 回搜索页正常播放网易云歌曲即可（官方接口拿不到地址时插件兜底）
+4. 想完全替换 SPlayer 音源：搜索页切到「插件」→ 来源选「GD Studio 网易云曲库」或「GD Studio JOOX 曲库」，搜索与播放都只经过 GD Studio
+5. 想让插件少拉大文件：插件设置 → 插件音质 → 选 `hq` / `auto`
 
 > 插件不会改变 SPlayer-Next 的解析顺序：官方接口先解析，官方拿不到完整地址时才轮到本插件。详见 [何时会走插件](#何时会走插件)。
 
@@ -33,12 +41,17 @@
 
 | SPlayer 来源 | source key | GD Studio `source` | 能力 |
 | --- | --- | --- | --- |
-| 网易云音乐 | `wy`（内置来源） | `netease` | 播放地址、歌词、封面、元数据搜索 |
-| JOOX | `joox`（独立来源） | `joox` | 播放地址、歌词、封面、曲库搜索 |
+| 网易云音乐 | `wy`（内置来源） | `netease` | 官方接口失败时的播放地址、歌词、封面、元数据搜索 |
+| GD Studio 网易云曲库 | `gdstudio`（独立来源） | `netease` | 在「插件」中搜索网易云曲库并播放，**不经过官方接口** |
+| GD Studio JOOX 曲库 | `joox`（独立来源） | `joox` | 在「插件」中搜索 JOOX 曲库并播放 |
+
+前两个来源共用 GD Studio 的网易云接口，区别只在入口：`wy` 是官方解析的后备，`gdstudio` 则是直接替代官方搜索的独立曲库。
 
 GD Studio 文档还列出 `tencent`、`kuwo`、`tidal`、`qobuz`、`apple`、`ytmusic`、`spotify`、`bilibili`。实测（2026-10-29）：`tencent` / `kuwo` / `tidal` / `qobuz` / `apple` / `ytmusic` 的搜索接口返回 HTTP 400 `Value of source is not supported.`，`spotify` 返回 503 维护页，`bilibili` 搜索返回空数组，因此本插件没有注册它们。接口恢复后可在 `SOURCE_POLICIES` 里加一条策略即可接入。
 
 ## 音质
+
+插件设置里的**插件音质**决定起始档位（默认 `hi-res`），播放器自带的音质设置不会限制插件；只有把它设为 `auto` 时才跟随播放器的音质档位。所以默认情况下即使播放器选的是 HQ，插件也会先尝试无损档，再逐级降档。
 
 SPlayer 的逻辑音质映射到 GD Studio 的 `br` 参数：
 
@@ -114,6 +127,7 @@ GD Studio 的搜索项**没有时长字段**，因此跨平台匹配只能依据
 
 | 配置 | 默认 | 行为与取舍 |
 | --- | --- | --- |
+| 插件音质（`quality`） | `hi-res` | 插件按此档位请求并从该档降级；`auto` 表示跟随播放器音质。选 `hq` 时最多只拉 320k |
 | 跨平台兜底（`crossPlatformFallback`） | 开启 | 主渠道无版权或上游故障时去另一个平台找同一首 |
 | 智能请求复用（`smartCache`） | 开启 | 合并相同并发播放请求，复用搜索结果、歌词、封面与 90 秒内的播放地址 |
 | 交付体检（`verifyDelivery`） | 开启 | 返回地址前取前几个字节确认能拉流，打不开就降一档 |
@@ -147,6 +161,8 @@ types=url&source=netease|joox&id=...&br=999|740|320|192|128
 
 SPlayer-Next 的解析顺序由宿主决定，插件无法改变：官方接口先解析；取得完整、非试听的地址就直接播放，只有官方接口返回不可用、仅 VIP 或仅试听时才调用音源插件。因此"非会员但有版权"并不是是否调用插件的判断条件：关键是官方接口是否返回了可用的完整地址。如果官方已返回低音质完整地址，插件不会被调用，也就无法升级音质。
 
+**想绕过这个顺序，就用独立曲库。** 搜索页切到「插件」后选择「GD Studio 网易云曲库」或「GD Studio JOOX 曲库」，搜到的曲目 `source` 是 `plugin`，播放器会直接向插件要地址，官方接口完全不参与——这就是本插件能提供的「替换 SPlayer 音源」。
+
 看日志可以确认：解析成功会有一行 `《歌名》已由 GD Studio 网易云解析，交付音质 …`；失败会有 `resolveUrl rejected`。两者都没有，说明官方接口已经给出可用地址、宿主根本没调用插件。
 
 日志位于 `app-data/logs/<日期>.log`，带 `[plugin:gdstudio.splayer-source]` 前缀。
@@ -179,6 +195,8 @@ SPlayer-Next 的解析顺序由宿主决定，插件无法改变：官方接口�
 - GD Studio 搜索接口不返回时长，跨平台匹配只能依据歌名与歌手，仍可能匹配到翻唱或不同混音；匹配错误时可关闭兜底开关。
 - 接口限流为 5 分钟内不超过 50 次请求，连续试听多首无版权歌可能触发 `GD_RATE_LIMITED`，等一分钟再试。
 - 返回的播放地址来自网易云 CDN，可能有时间限制；没有过期字段时插件只缓存 90 秒。
+- 插件音质默认 `hi-res`，网易云无损单曲实测 27–52MB；流量或设备吃不消时把插件音质改成 `hq` 或 `auto`。
+- 独立曲库的曲目由 `gdstudio` / `joox` 两个 source key 标识，与内置来源的 `wy` 互不影响；移除插件后队列中的插件歌曲会保留但无法播放。
 - 仅使用你有权访问和播放的音乐，并遵守 GD Studio、音乐平台及当地法律法规。
 
 ## 开发与测试
@@ -195,8 +213,8 @@ node scripts/check-artifact.mjs  # 产物可加载且能解析
 
 | 测试文件 | 覆盖 |
 | --- | --- |
-| `test/plugin.test.js` | 注册声明、音质映射、音质上报、交付体检、缓存、歌词、封面、错误处理 |
-| `test/search.test.js` | 独立 JOOX 曲库分页、候选字段、关键词截断、元数据搜索、错误响应 |
+| `test/plugin.test.js` | 注册声明、音质选择与默认 hi-res、音质上报、交付体检、缓存、歌词、封面、错误处理 |
+| `test/search.test.js` | GD Studio 网易云 / JOOX 曲库分页、候选字段、关键词截断、元数据搜索、错误响应 |
 | `test/fallback.test.js` | 双向跨平台匹配、版本标记规则、503 冷却、429 限流 |
 | `test/quota.test.js` | 省请求模式、可播放优先、不可用记忆、缓存过期、超时与网络错误映射 |
 | `test/release-seam.test.js` | 源码/产物字节一致、CI 步骤、产物冒烟 |

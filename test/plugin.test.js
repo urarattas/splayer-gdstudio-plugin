@@ -13,12 +13,13 @@ const neteaseTrack = {
 test("registers NetEase and JOOX capabilities with the documented actions", () => {
   const { registration, handlers } = loadPlugin();
 
-  assert.deepEqual(Object.keys(registration.sources), ["wy", "joox"]);
+  assert.deepEqual(Object.keys(registration.sources), ["wy", "gdstudio", "joox"]);
   for (const source of Object.values(registration.sources)) {
     assert.deepEqual([...source.actions], ["musicUrl", "musicLyric", "musicPic", "musicSearch"]);
     assert.deepEqual([...source.qualities], ["lq", "sq", "hq", "lossless", "hi-res"]);
   }
-  assert.equal(registration.settings[0].key, "crossPlatformFallback");
+  assert.equal(registration.settings[0].key, "quality");
+  assert.equal(registration.settings[0].default, "hi-res");
   for (const action of ["musicUrl", "musicLyric", "musicPic", "musicSearch"]) {
     assert.equal(typeof handlers[action], "function");
   }
@@ -172,7 +173,9 @@ test("shares one in-flight resolution between concurrent calls", async () => {
 });
 
 test("throws GD_NO_URL after the whole ladder is empty when fallback is off", async () => {
-  const { handlers, requests } = loadPlugin({ settings: { crossPlatformFallback: false } });
+  const { handlers, requests } = loadPlugin({
+    settings: { crossPlatformFallback: false, quality: "lossless" },
+  });
 
   await assert.rejects(
     handlers.musicUrl({ source: "wy", quality: "lossless", musicInfo: neteaseTrack }),
@@ -265,6 +268,7 @@ test("rejects unsupported sources and missing track ids", async () => {
 test("resolves a JOOX catalog track through its own source key", async () => {
   const id = "MX14hTaB09S4XtuczK40Rg==";
   const { handlers, requests } = loadPlugin({
+    settings: { quality: "hq" },
     route: createRoute({ urls: { [`joox:${id}:320`]: url("https://cdn.example.test/joox.mp3", 320) } }),
   });
 
@@ -278,6 +282,80 @@ test("resolves a JOOX catalog track through its own source key", async () => {
   assert.equal(params.get("source"), "joox");
   assert.equal(params.get("id"), id);
   assert.equal(params.get("br"), "320");
+  assert.equal(result.quality, "hq");
+});
+
+
+test("defaults to hi-res even when the player requests hq", async () => {
+  const { handlers, requests } = loadPlugin({
+    route: createRoute({
+      urls: { "netease:18902710:999": url("https://cdn.example.test/song.flac", 1650) },
+    }),
+  });
+
+  const result = await handlers.musicUrl({
+    source: "wy",
+    quality: "hq",
+    musicInfo: neteaseTrack,
+  });
+
+  assert.equal(requests[0].url.searchParams.get("br"), "999");
+  assert.equal(result.quality, "hi-res");
+});
+
+test("follows the player quality when the plugin setting is auto", async () => {
+  const { handlers, requests } = loadPlugin({
+    settings: { quality: "auto" },
+    route: createRoute({
+      urls: { "netease:18902710:320": url("https://cdn.example.test/song.mp3", 320) },
+    }),
+  });
+
+  const result = await handlers.musicUrl({
+    source: "wy",
+    quality: "hq",
+    musicInfo: neteaseTrack,
+  });
+
+  assert.equal(requests[0].url.searchParams.get("br"), "320");
+  assert.equal(result.quality, "hq");
+});
+
+test("caps the requested quality at the selected setting", async () => {
+  const { handlers, requests } = loadPlugin({
+    settings: { quality: "sq" },
+    route: createRoute({
+      urls: { "netease:18902710:192": url("https://cdn.example.test/song.mp3", 192) },
+    }),
+  });
+
+  const result = await handlers.musicUrl({
+    source: "wy",
+    quality: "hi-res",
+    musicInfo: neteaseTrack,
+  });
+
+  assert.equal(requests[0].url.searchParams.get("br"), "192");
+  assert.equal(result.quality, "sq");
+});
+
+test("resolves the GD Studio NetEase catalog as an independent source", async () => {
+  const { handlers, requests } = loadPlugin({
+    settings: { quality: "hq" },
+    route: createRoute({
+      urls: { "netease:18902710:320": url("https://cdn.example.test/catalog.mp3", 320) },
+    }),
+  });
+
+  const result = await handlers.musicUrl({
+    source: "gdstudio",
+    quality: "hq",
+    musicInfo: { id: "18902710", name: "Love", singer: "Keyshia Cole" },
+  });
+
+  assert.equal(requests[0].url.searchParams.get("source"), "netease");
+  assert.equal(requests[0].url.searchParams.get("id"), "18902710");
+  assert.equal(result.url, "https://cdn.example.test/catalog.mp3");
   assert.equal(result.quality, "hq");
 });
 
