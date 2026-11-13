@@ -35,12 +35,11 @@ test("falls back to JOOX when NetEase has no playable address", async () => {
     "url:netease",
     "url:netease",
     "url:netease",
-    "url:netease",
     "search:joox",
     "url:joox",
   ]);
-  assert.equal(requests[5].url.searchParams.get("name"), "Love Keyshia Cole");
-  assert.equal(requests[6].url.searchParams.get("br"), "999");
+  assert.equal(requests[4].url.searchParams.get("name"), "Love Keyshia Cole");
+  assert.equal(requests[5].url.searchParams.get("br"), "999");
   assert.equal(result.url, "https://cdn.example.test/joox.flac");
   assert.equal(result.quality, "lossless");
   assert.ok(logs.some(({ level, args }) => level === "info" && /改用/.test(String(args[0]))));
@@ -113,7 +112,7 @@ test("keeps failures local when cross-platform fallback is off", async () => {
   assert.deepEqual(requestTypes(requests), ["url:netease", "url:netease", "url:netease"]);
 });
 
-test("cools down a platform that answers 503 and then skips it", async () => {
+test("cools down a platform only after repeated upstream failures", async () => {
   let neteaseCalls = 0;
   const { handlers } = loadPlugin({
     route: (requestUrl) => {
@@ -136,10 +135,13 @@ test("cools down a platform that answers 503 and then skips it", async () => {
   const request = { source: "wy", quality: "hq", musicInfo: neteaseTrack };
   const first = await handlers.musicUrl(request);
   const second = await handlers.musicUrl(request);
+  const third = await handlers.musicUrl(request);
 
+  // 前两次各重试 3 次后进入冷却；第三次不再请求网易云，直接用 JOOX。
+  assert.equal(neteaseCalls, 6);
   assert.equal(first.url, "https://cdn.example.test/joox.mp3");
   assert.equal(second.url, "https://cdn.example.test/joox.mp3");
-  assert.equal(neteaseCalls, 1);
+  assert.equal(third.url, "https://cdn.example.test/joox.mp3");
 });
 
 test("stops probing after a 429 and reuses the cooldown", async () => {

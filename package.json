@@ -1,6 +1,6 @@
 {
   "name": "splayer-gdstudio-plugin",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "SPlayer-Next 音源插件：官方网易云拿不到地址时用 GD Studio 接管播放地址，默认 hi-res，歌词封面保持官方 (GD Studio API source plugin for SPlayer-Next)",
   "license": "MIT",

@@ -63,9 +63,10 @@ test("downgrades the bitrate ladder when the top tiers have no URL", async () =>
     musicInfo: neteaseTrack,
   });
 
+  // hi-res 先试 999；740 与 999 返回同一个文件，不再重复请求。
   assert.deepEqual(
     requests.map(({ url: requestUrl }) => requestUrl.searchParams.get("br")),
-    ["999", "740", "320"],
+    ["999", "320"],
   );
   assert.equal(result.quality, "hq");
 });
@@ -92,7 +93,7 @@ test("steps to the next tier when the delivery probe rejects the address", async
     route: createRoute({
       urls: {
         "netease:18902710:999": url("https://cdn.example.test/broken.flac", 842),
-        "netease:18902710:740": url("https://cdn.example.test/good.flac", 842),
+        "netease:18902710:320": url("https://cdn.example.test/good.mp3", 320),
       },
     }),
     probeResponse: (requestUrl) =>
@@ -109,11 +110,11 @@ test("steps to the next tier when the delivery probe rejects the address", async
 
   assert.deepEqual(
     requests.map(({ url: requestUrl }) => requestUrl.searchParams.get("br")),
-    ["999", "740"],
+    ["999", "320"],
   );
   assert.equal(probes.length, 2);
-  assert.equal(result.url, "https://cdn.example.test/good.flac");
-  assert.equal(result.quality, "lossless");
+  assert.equal(result.url, "https://cdn.example.test/good.mp3");
+  assert.equal(result.quality, "hq");
 });
 
 test("reuses a resolved URL for the same track", async () => {

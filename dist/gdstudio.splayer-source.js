@@ -1,13 +1,13 @@
 /**
  * @name        GD Studio 音源
  * @id          gdstudio.splayer-source
- * @version     1.2.0
+ * @version     1.2.1
  * @description 官方音源拿不到时，用 GD Studio 接管网易云播放地址；歌词与封面保持官方，逐档解析音质并交付体检
  * @author      splayer-gdstudio-plugin
  * @type        source
  * @grant       network
  * @apiLevel    5
- * @changelog   移除独立曲库与 GD 歌词/封面，只接管官方拿不到的播放地址（默认 hi-res）
+ * @changelog   5xx 自动重试并降低通道冷却触发频率，修复间歇性无法获取播放地址
  */
 
 const API_BASE_URL = "https://music-api.gdstudio.xyz/api.php";
@@ -31,8 +31,12 @@ const DURATION_TOLERANCE_SECONDS = 20;
 // GD Studio 限流为 5 分钟内不超过 50 次请求；命中 429 后按 Retry-After 进入冷却。
 const RATE_LIMIT_COOLDOWN = 60_000;
 const MAX_RATE_LIMIT_COOLDOWN = 15 * 60_000;
-// 502/503/504 说明上游平台通道故障；冷却该平台，避免继续白打请求。
-const CHANNEL_COOLDOWN = 2 * 60_000;
+// 502/503/504 是 GD Studio 常见的瞬时故障：先按退避重试，连续多次失败才冷却该平台。
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const MAX_REQUEST_ATTEMPTS = 3;
+const RETRY_DELAYS_MS = [300, 900];
+const CHANNEL_FAILURE_THRESHOLD = 2;
+const CHANNEL_COOLDOWN = 60_000;
 const MAX_CHANNEL_COOLDOWN = 15 * 60_000;
 // 交付体检：返回地址前只取前几个字节确认真的能拉流（CDN 请求，不消耗 GD Studio 额度）。
 const PROBE_TIMEOUT = 4_000;
@@ -317,6 +321,7 @@ const createResolutionCore = () => {
         responses: new Map(),
         pending: new Map(),
         channelCooldowns: new Map(),
+        channelFailures: new Map(),
         unavailableTracks: new Map(),
         probes: new Map(),
         rateLimitUntil: 0,
@@ -404,7 +409,18 @@ const createResolutionCore = () => {
 
   const noteChannelFailure = (state, source, error) => {
     if (!isUpstreamUnavailableError(error)) return;
+    const failures = (state.channelFailures.get(source) ?? 0) + 1;
+    // 单次 503 大多是一瞬间的抖动：先记住，连续两次才冷却，避免一首歌失败就冻结一分钟。
+    if (failures < CHANNEL_FAILURE_THRESHOLD) {
+      state.channelFailures.set(source, failures);
+      return;
+    }
+    state.channelFailures.delete(source);
     state.channelCooldowns.set(source, Date.now() + cooldownMillis(error, CHANNEL_COOLDOWN));
+  };
+
+  const noteChannelSuccess = (state, source) => {
+    if (state.channelFailures.size > 0) state.channelFailures.delete(source);
   };
 
   const trackUnavailableKey = (source, id) => `${source}:${String(id)}`;
@@ -574,10 +590,34 @@ const createResolutionCore = () => {
     return undefined;
   };
 
+  const sleep = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+  /** 宿主错误 → 插件错误；只有网络错误和 502/503/504 值得重试。 */
+  const normaliseRequestError = (error) => {
+    if (isHostCancellationError(error)) return error;
+    if (
+      [RESOLUTION_TIMEOUT_ERROR, CROSS_PLATFORM_LIMIT_ERROR].includes(String(error?.code))
+    ) {
+      return error;
+    }
+    if (isHostRequestTimeoutError(error)) return deadlineError();
+    if (error?.status) return error;
+    if (String(error?.code).startsWith("GD_")) return error;
+    return pluginError(
+      NETWORK_ERROR,
+      `GD Studio 网络请求失败：${error?.message ?? error}`,
+    );
+  };
+
+  const isRetryableFailure = (error) =>
+    RETRYABLE_STATUS.has(Number(error?.status)) || error?.code === NETWORK_ERROR;
+
   const performRequest = async (params, context) => {
     const { deadline, kind, budget } = context;
     const url = buildApiUrl(params);
     let timeout = REQUEST_TIMEOUT;
+    let lastError;
 
     if (budget) {
       const remaining = budget.deadline - Date.now();
@@ -585,50 +625,57 @@ const createResolutionCore = () => {
       budget.remaining -= 1;
       timeout = Math.min(timeout, Math.max(1, remaining));
     }
-    if (Number.isFinite(deadline)) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw deadlineError();
-      timeout = Math.min(timeout, Math.max(1, remaining));
-    }
 
-    const timeoutCode = RESOLUTION_TIMEOUT_ERROR;
-    let response;
-    try {
-      response = await requestWithTimeout(
-        url,
-        { method: "GET", responseType: "json", timeout },
-        timeoutCode,
-        deadlineMessage(kind),
-      );
-    } catch (error) {
-      if (isHostCancellationError(error)) throw error;
-      if (
-        [RESOLUTION_TIMEOUT_ERROR, CROSS_PLATFORM_LIMIT_ERROR].includes(String(error?.code))
-      ) {
-        throw error;
+    for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt += 1) {
+      let attemptTimeout = timeout;
+      if (Number.isFinite(deadline)) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw lastError ?? deadlineError();
+        attemptTimeout = Math.min(attemptTimeout, Math.max(1, remaining));
       }
-      if (isHostRequestTimeoutError(error)) throw deadlineError();
-      throw pluginError(
-        NETWORK_ERROR,
-        `GD Studio 网络请求失败：${error?.message ?? error}`,
-      );
-    }
 
-    if (!response || Number(response.status) < 200 || Number(response.status) >= 300) {
-      throwHttpError(response);
-    }
+      try {
+        const response = await requestWithTimeout(
+          url,
+          { method: "GET", responseType: "json", timeout: attemptTimeout },
+          RESOLUTION_TIMEOUT_ERROR,
+          deadlineMessage(),
+        );
 
-    if (kind === "search") {
-      if (!extractCandidates(response.body)) {
-        throw pluginError(INVALID_RESPONSE, "GD Studio 搜索接口返回的结构无效。");
+        if (!response || Number(response.status) < 200 || Number(response.status) >= 300) {
+          throwHttpError(response);
+        }
+
+        if (kind === "search") {
+          if (!extractCandidates(response.body)) {
+            throw pluginError(INVALID_RESPONSE, "GD Studio 搜索接口返回的结构无效。");
+          }
+          return response.body;
+        }
+
+        if (!isRecord(response.body)) {
+          throw pluginError(INVALID_RESPONSE, "GD Studio 返回的不是有效 JSON 对象。");
+        }
+        return response.body;
+      } catch (error) {
+        const failure = normaliseRequestError(error);
+        lastError = failure;
+        if (!isRetryableFailure(failure) || attempt >= MAX_REQUEST_ATTEMPTS) {
+          if (attempt > 1) failure.message = `${failure.message}（已尝试 ${attempt} 次）`;
+          throw failure;
+        }
+
+        const delay = RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS.at(-1);
+        const remaining = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+        if (remaining <= delay + 50) throw failure;
+        splayer.log.warn(
+          `GD Studio 请求失败（${failure.message}），${delay} 毫秒后重试（第 ${attempt + 1}/${MAX_REQUEST_ATTEMPTS} 次）。`,
+        );
+        await sleep(delay);
       }
-      return response.body;
     }
 
-    if (!isRecord(response.body)) {
-      throw pluginError(INVALID_RESPONSE, "GD Studio 返回的不是有效 JSON 对象。");
-    }
-    return response.body;
+    throw lastError ?? deadlineError();
   };
 
   const cacheTtlFor = (kind, body) => {
@@ -765,11 +812,17 @@ const createResolutionCore = () => {
       if (bitrate !== undefined && !bitrates.includes(bitrate)) bitrates.push(bitrate);
     }
 
+    // GD Studio 对网易云的 740 与 999 返回同一个文件；请求 hi-res 时试过 999 就不必再请求 740。
+    const candidates =
+      requestedQuality === "hi-res"
+        ? bitrates.filter((bitrate) => bitrate !== 740)
+        : bitrates;
+
     // 省请求模式本身就是用户显式选的取舍，不改它的顺序。
-    if (!config.playableFirst || config.economyMode) return bitrates;
+    if (!config.playableFirst || config.economyMode) return candidates;
     return [
-      ...bitrates.filter((bitrate) => !LOSSLESS_BITRATES.has(bitrate)),
-      ...bitrates.filter((bitrate) => LOSSLESS_BITRATES.has(bitrate)),
+      ...candidates.filter((bitrate) => !LOSSLESS_BITRATES.has(bitrate)),
+      ...candidates.filter((bitrate) => LOSSLESS_BITRATES.has(bitrate)),
     ];
   };
 
@@ -835,6 +888,7 @@ const createResolutionCore = () => {
     }
 
     if (!body) throw lastError ?? pluginError(NO_URL_ERROR, "GD Studio 未返回播放地址。");
+    if (state) noteChannelSuccess(state, source);
     return normalisePlayback(body, QUALITY_BY_BITRATE[resolvedBitrate] ?? requestedQuality);
   };
 
