@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify tag matches plugin version
+        run: node scripts/check-version.mjs "${{ github.ref_name }}"
+
+      - name: Build plugin
+        run: node scripts/build.mjs
+
+      - name: Verify source and distribution parity
+        run: node scripts/check-dist.mjs
+
+      - name: Smoke-test distribution artifact
+        run: node scripts/check-artifact.mjs
+
+      - name: Check JavaScript syntax
+        run: node --check src/plugin.js && node --check dist/gdstudio.splayer-source.js
+
+      - name: Run tests
+        run: node --test
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: dist/gdstudio.splayer-source.js
+          fail_on_unmatched_files: true
+          body: |
+            SPlayer-Next 音源插件 `gdstudio.splayer-source` ${{ github.ref_name }}
+
+            **安装**：下载下方 `gdstudio.splayer-source.js`，在 SPlayer-Next 中打开
+            设置 → 插件管理 → 本地导入，选择该文件。
+
+            **在线导入**（可直接粘贴到「在线导入」）：
+            https://github.com/${{ github.repository }}/releases/latest/download/gdstudio.splayer-source.js
+
+            **仅为学习使用**，请支持正版音乐，不要用于商业用途。

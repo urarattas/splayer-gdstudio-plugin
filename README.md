@@ -38,11 +38,17 @@ SPlayer-Next 的插件 API 没有“插件优先于官方接口”的开关，�
 
 ## 30 秒上手
 
-1. 下载 [`dist/gdstudio.splayer-source.js`](./dist/gdstudio.splayer-source.js)
+1. 下载 [`dist/gdstudio.splayer-source.js`](./dist/gdstudio.splayer-source.js)，或从 [Releases](https://github.com/urarattas/splayer-gdstudio-plugin/releases/latest) 下载最新构建
 2. 打开 SPlayer-Next → **设置 → 插件管理 → 本地导入**，选择该文件
 3. 打开 **设置 → 播放 → 音质**，选择 **Hi-Res**（关键一步，见上一节）
 4. 正常播放官方搜索或收藏里的网易云歌曲；官方拿不到 hi-res 时插件会自动接管
 5. 想限制插件拉取的音质：插件设置 → 插件音质 → 选 `hq` / `lossless` 等
+
+也可以在「插件管理 → 在线导入」直接粘贴固定地址，之后每次发版都会自动提示更新：
+
+```text
+https://github.com/urarattas/splayer-gdstudio-plugin/releases/latest/download/gdstudio.splayer-source.js
+```
 
 判断是否接管成功：日志里会出现 `《歌名》已由GD Studio 网易云解析，交付音质 hi-res。`；如果没有任何 `[plugin:gdstudio.splayer-source]` 行，说明官方已经给出了可用地址。
 
@@ -216,6 +222,19 @@ node scripts/check-artifact.mjs  # 产物可加载且能解析
 
 测试宿主 `test/plugin-host.js` 只注入文档列出的 `splayer`、`URL`、`Promise`、`setTimeout`、`Date` 等全局对象，并按宿主的方式序列化处理器结果。
 
+## 发布流程
+
+版本号同时写在 `src/plugin.js` 的 `@version` 和 `package.json` 的 `version`，两者必须一致。发版只需推送标签：
+
+```bash
+git tag v1.2.1
+git push origin v1.2.1
+```
+
+`.github/workflows/release.yml` 会在标签推送后依次执行：校验标签与版本一致 → 构建 `dist` → 校验产物与源码一致 → 产物冒烟 → 语法检查 → 全部测试 → 创建 GitHub Release 并上传 `gdstudio.splayer-source.js`。
+
+`@updateUrl` 指向 `releases/latest/download/gdstudio.splayer-source.js`，宿主可据此提示更新；这个地址始终指向最新一版。
+
 ## 发布到 SPlayer 插件市场
 
 官方市场投稿入口是 [SPlayer-Dev/plugins 新建插件 Issue](https://github.com/SPlayer-Dev/plugins/issues/new?template=new-plugin.yml)。投稿时选择 `source`，填写 `gdstudio.splayer-source`，上传 `dist/gdstudio.splayer-source.js`，并确认自己对脚本内容和合法性负责。
@@ -225,3 +244,7 @@ node scripts/check-artifact.mjs  # 产物可加载且能解析
 本项目代码采用 [MIT 许可证](./LICENSE)。本项目是社区插件，与 SPlayer-Next、GD Studio、网易云音乐、JOOX 均无官方隶属或背书关系。GD Studio API 的使用需遵守其声明的 [CC BY-NC 4.0](https://music-api.gdstudio.xyz/api.php) 许可与平台条款，请注明出处「GD音乐台(music.gdstudio.xyz)」，不要用于商业用途。
 
 <sub>关键词：SPlayer-Next 插件 · 音源插件 · source plugin · 网易云音乐 · JOOX · 无损音乐 · FLAC · 播放地址解析 · 跨平台匹配 · GD Studio API · GD 音乐台 · music source plugin · NetEase Cloud Music</sub>
+
+---
+
+（仅为学习使用）

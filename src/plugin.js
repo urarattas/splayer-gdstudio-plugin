@@ -7,6 +7,7 @@
  * @type        source
  * @grant       network
  * @apiLevel    5
+ * @updateUrl   https://github.com/urarattas/splayer-gdstudio-plugin/releases/latest/download/gdstudio.splayer-source.js
  * @changelog   5xx 自动重试并降低通道冷却触发频率，修复间歇性无法获取播放地址
  */
 
