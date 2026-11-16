@@ -183,7 +183,8 @@ test("throws GD_NO_URL after the whole ladder is empty when fallback is off", as
     handlers.musicUrl({ source: "wy", quality: "lossless", musicInfo: neteaseTrack }),
     (error) => {
       assert.equal(error.code, "GD_NO_URL");
-      assert.match(error.message, /128k/);
+      assert.match(error.message, /已尝试 740 \/ 320 \/ 192 \/ 128 档音质/);
+      assert.match(error.message, /版权/);
       return true;
     },
   );

@@ -112,9 +112,11 @@ test("keeps failures local when cross-platform fallback is off", async () => {
   assert.deepEqual(requestTypes(requests), ["url:netease", "url:netease", "url:netease"]);
 });
 
-test("cools down a platform only after repeated upstream failures", async () => {
+test("keeps the platform usable when upstream 5xx is a site-wide outage", async () => {
   let neteaseCalls = 0;
+  let jooxCalls = 0;
   const { handlers } = loadPlugin({
+    fastTimers: true,
     route: (requestUrl) => {
       const params = requestUrl.searchParams;
       const type = params.get("types");
@@ -126,6 +128,7 @@ test("cools down a platform only after repeated upstream failures", async () => 
         return { status: 200, body: [track("j1", "Love", ["Keyshia Cole"])] };
       }
       if (type === "url" && params.get("source") === "joox") {
+        jooxCalls += 1;
         return { status: 200, body: url("https://cdn.example.test/joox.mp3", 320) };
       }
       return { status: 200, body: {} };
@@ -133,15 +136,14 @@ test("cools down a platform only after repeated upstream failures", async () => 
   });
 
   const request = { source: "wy", quality: "hq", musicInfo: neteaseTrack };
-  const first = await handlers.musicUrl(request);
-  const second = await handlers.musicUrl(request);
-  const third = await handlers.musicUrl(request);
+  await assert.rejects(handlers.musicUrl(request), (error) => error.code === "GD_HTTP_503");
+  await assert.rejects(handlers.musicUrl(request), (error) => error.code === "GD_HTTP_503");
+  await assert.rejects(handlers.musicUrl(request), (error) => error.code === "GD_HTTP_503");
 
-  // 前两次各重试 3 次后进入冷却；第三次不再请求网易云，直接用 JOOX。
-  assert.equal(neteaseCalls, 6);
-  assert.equal(first.url, "https://cdn.example.test/joox.mp3");
-  assert.equal(second.url, "https://cdn.example.test/joox.mp3");
-  assert.equal(third.url, "https://cdn.example.test/joox.mp3");
+  // 5xx 是整站故障：首次解析重试 6 次并触发熔断，之后每首歌只发一次探测请求；
+  // 跨平台兜底打的是同一个域名，整站故障期间一律不发。
+  assert.equal(neteaseCalls, 8);
+  assert.equal(jooxCalls, 0);
 });
 
 test("stops probing after a 429 and reuses the cooldown", async () => {

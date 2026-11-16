@@ -20,6 +20,8 @@ export const loadPlugin = ({
   route,
   probeResponse,
   now = () => Date.now(),
+  // 重试退避是真实等待；需要验证重试逻辑的用例把它压成 0 毫秒，避免整套测试变慢。
+  fastTimers = false,
 } = {}) => {
   const registration = {};
   const handlers = {};
@@ -89,7 +91,7 @@ export const loadPlugin = ({
     URLSearchParams,
     Promise,
     console,
-    setTimeout,
+    setTimeout: fastTimers ? (handler) => setTimeout(handler, 0) : setTimeout,
     clearTimeout,
     TextEncoder,
     TextDecoder,

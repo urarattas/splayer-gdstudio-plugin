@@ -1,14 +1,14 @@
 /**
  * @name        GD Studio 音源
  * @id          gdstudio.splayer-source
- * @version     1.2.1
+ * @version     1.3.0
  * @description 官方音源拿不到时，用 GD Studio 接管网易云播放地址；歌词与封面保持官方，逐档解析音质并交付体检
  * @author      splayer-gdstudio-plugin
  * @type        source
  * @grant       network
  * @apiLevel    5
  * @updateUrl   https://github.com/urarattas/splayer-gdstudio-plugin/releases/latest/download/gdstudio.splayer-source.js
- * @changelog   5xx 自动重试并降低通道冷却触发频率，修复间歇性无法获取播放地址
+ * @changelog   5xx 改为短间隔快重试并加入接口熔断，修复间歇性无法获取播放地址
  */
 
 const API_BASE_URL = "https://music-api.gdstudio.xyz/api.php";
@@ -34,11 +34,22 @@ const RATE_LIMIT_COOLDOWN = 60_000;
 const MAX_RATE_LIMIT_COOLDOWN = 15 * 60_000;
 // 502/503/504 是 GD Studio 常见的瞬时故障：先按退避重试，连续多次失败才冷却该平台。
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
-const MAX_REQUEST_ATTEMPTS = 3;
-const RETRY_DELAYS_MS = [300, 900];
+const MAX_REQUEST_ATTEMPTS = 6;
+// 实测 503 与请求频率无关（每 6 秒一次仍会命中），是后端某个节点随机故障：
+// 快速重试更容易命中健康节点，因此退避从短开始；总等待约 7 秒，覆盖常见的 5 秒级抖动。
+const RETRY_DELAYS_MS = [250, 600, 1_200, 2_000, 3_000];
+// 单曲最多重试这么久；超过就直接失败，避免宿主干等十几秒。
+const RETRY_TIME_BUDGET = 8_000;
+// 抖动避免多个并发请求同时重试，把刚恢复的上游再次打挂。
+const RETRY_JITTER_RATIO = 0.25;
 const CHANNEL_FAILURE_THRESHOLD = 2;
-const CHANNEL_COOLDOWN = 60_000;
-const MAX_CHANNEL_COOLDOWN = 15 * 60_000;
+// 5xx 往往是整段接口不可用（实测可持续十几秒），冷却太久会让后续歌曲全部失败。
+const CHANNEL_COOLDOWN = 15_000;
+const MAX_CHANNEL_COOLDOWN = 60_000;
+// 整站 503 时冷却单个平台没有意义：短时间内多次 5xx 就进入短暂熔断，快速失败而不是反复重试。
+const SERVICE_OUTAGE_WINDOW = 20_000;
+const SERVICE_OUTAGE_THRESHOLD = 3;
+const SERVICE_OUTAGE_DURATION = 15_000;
 // 交付体检：返回地址前只取前几个字节确认真的能拉流（CDN 请求，不消耗 GD Studio 额度）。
 const PROBE_TIMEOUT = 4_000;
 const PROBE_RANGE = "bytes=0-3";
@@ -326,6 +337,8 @@ const createResolutionCore = () => {
         unavailableTracks: new Map(),
         probes: new Map(),
         rateLimitUntil: 0,
+        serviceFailures: [],
+        serviceOutageUntil: 0,
       };
     }
     return session;
@@ -410,6 +423,8 @@ const createResolutionCore = () => {
 
   const noteChannelFailure = (state, source, error) => {
     if (!isUpstreamUnavailableError(error)) return;
+    // 整站熔断已经限制了重试次数，再叠加平台冷却只会让后续歌曲更早被跳过。
+    if (remainingSeconds(state.serviceOutageUntil) > 0) return;
     const failures = (state.channelFailures.get(source) ?? 0) + 1;
     // 单次 503 大多是一瞬间的抖动：先记住，连续两次才冷却，避免一首歌失败就冻结一分钟。
     if (failures < CHANNEL_FAILURE_THRESHOLD) {
@@ -422,6 +437,36 @@ const createResolutionCore = () => {
 
   const noteChannelSuccess = (state, source) => {
     if (state.channelFailures.size > 0) state.channelFailures.delete(source);
+  };
+
+  /** 5xx 出现频率过高说明整段接口不可用，熔断一段时间，避免每首歌都重试四次。 */
+  const noteServiceFailure = (state) => {
+    const now = Date.now();
+    state.serviceFailures = state.serviceFailures.filter(
+      (at) => now - at < SERVICE_OUTAGE_WINDOW,
+    );
+    state.serviceFailures.push(now);
+    if (state.serviceFailures.length < SERVICE_OUTAGE_THRESHOLD) return;
+    state.serviceFailures = [];
+    state.serviceOutageUntil = Math.max(state.serviceOutageUntil, now + SERVICE_OUTAGE_DURATION);
+  };
+
+  const noteServiceSuccess = (state) => {
+    if (state.serviceFailures.length > 0) state.serviceFailures = [];
+  };
+
+  /**
+   * 熔断期内不再重试整套阶梯，只发一次探测请求：
+   * 上游恢复时能立刻播上，没恢复时也只浪费一个请求。
+   */
+  const attemptBudget = (state) =>
+    remainingSeconds(state.serviceOutageUntil) > 0 ? 1 : MAX_REQUEST_ATTEMPTS;
+
+  const describeOutage = (state) => {
+    const remaining = remainingSeconds(state.serviceOutageUntil);
+    return remaining > 0
+      ? `GD Studio 接口近期多次返回 HTTP 5xx，约 ${remaining} 秒后自动恢复；可稍后重试或先播放其它平台的歌曲。`
+      : "";
   };
 
   const trackUnavailableKey = (source, id) => `${source}:${String(id)}`;
@@ -495,7 +540,11 @@ const createResolutionCore = () => {
   const throwHttpError = (response) => {
     const status = Number(response?.status) || 0;
     const bodyMessage = getBodyMessage(response?.body);
-    const parts = [`GD Studio 请求失败（HTTP ${status}）`];
+    const parts = [
+      status >= 500
+        ? `GD Studio 接口暂时不可用（HTTP ${status}）`
+        : `GD Studio 请求失败（HTTP ${status}）`,
+    ];
     if (bodyMessage) parts.push(bodyMessage);
 
     const retryAfter = getHeader(response?.headers, "retry-after");
@@ -615,10 +664,13 @@ const createResolutionCore = () => {
     RETRYABLE_STATUS.has(Number(error?.status)) || error?.code === NETWORK_ERROR;
 
   const performRequest = async (params, context) => {
-    const { deadline, kind, budget } = context;
+    const { deadline, kind, budget, state } = context;
     const url = buildApiUrl(params);
     let timeout = REQUEST_TIMEOUT;
     let lastError;
+
+    const maxAttempts = state ? attemptBudget(state) : MAX_REQUEST_ATTEMPTS;
+    const retryDeadline = Date.now() + RETRY_TIME_BUDGET;
 
     if (budget) {
       const remaining = budget.deadline - Date.now();
@@ -627,7 +679,7 @@ const createResolutionCore = () => {
       timeout = Math.min(timeout, Math.max(1, remaining));
     }
 
-    for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let attemptTimeout = timeout;
       if (Number.isFinite(deadline)) {
         const remaining = deadline - Date.now();
@@ -651,26 +703,40 @@ const createResolutionCore = () => {
           if (!extractCandidates(response.body)) {
             throw pluginError(INVALID_RESPONSE, "GD Studio 搜索接口返回的结构无效。");
           }
+          if (state) noteServiceSuccess(state);
           return response.body;
         }
 
         if (!isRecord(response.body)) {
           throw pluginError(INVALID_RESPONSE, "GD Studio 返回的不是有效 JSON 对象。");
         }
+        if (state) noteServiceSuccess(state);
         return response.body;
       } catch (error) {
         const failure = normaliseRequestError(error);
         lastError = failure;
-        if (!isRetryableFailure(failure) || attempt >= MAX_REQUEST_ATTEMPTS) {
-          if (attempt > 1) failure.message = `${failure.message}（已尝试 ${attempt} 次）`;
+        const isUpstream = RETRYABLE_STATUS.has(Number(failure.status));
+        // 只有整段接口故障才计入熔断；单曲不可用、限流和超时都不算。
+        if (isUpstream && state) noteServiceFailure(state);
+
+        if (!isRetryableFailure(failure) || attempt >= maxAttempts) {
+          // 只有 5xx 才提示重试次数，超时类错误照原样抛出，避免误导。
+          if (isUpstream && attempt > 1) {
+            failure.message = `${failure.message}（已重试 ${attempt - 1} 次）`;
+          }
+          const outage = isUpstream && state ? describeOutage(state) : "";
+          if (outage) failure.message = `${failure.message}。${outage}`;
           throw failure;
         }
 
-        const delay = RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS.at(-1);
+        const base = RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS.at(-1);
+        const jitter = Math.round(base * RETRY_JITTER_RATIO * Math.random());
+        const delay = base + jitter;
         const remaining = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
-        if (remaining <= delay + 50) throw failure;
+        // 单曲重试时间预算用完就停，不再拖长观众的等待。
+        if (remaining <= delay + 50 || Date.now() + delay > retryDeadline) throw failure;
         splayer.log.warn(
-          `GD Studio 请求失败（${failure.message}），${delay} 毫秒后重试（第 ${attempt + 1}/${MAX_REQUEST_ATTEMPTS} 次）。`,
+          `${failure.message}，${delay} 毫秒后重试（第 ${attempt + 1}/${maxAttempts} 次）。`,
         );
         await sleep(delay);
       }
@@ -879,10 +945,18 @@ const createResolutionCore = () => {
         const hasFallback = index < ladder.length - 1;
         // 完整阶梯都没有地址说明是版权问题，而非某一档抖动；省请求模式的阶梯不完整，不能据此下结论。
         if (!hasFallback) {
-          if (state && !state.config.economyMode && error?.code === NO_URL_ERROR) {
-            rememberUnavailableTrack(state, source, id, error);
+          // 整条阶梯都空时，报"这首歌不可用"，而不是把最后一档的 128k 写进消息里误导用户。
+          const finalError =
+            error?.code === NO_URL_ERROR
+              ? pluginError(
+                  NO_URL_ERROR,
+                  `${policy.name}没有可用播放地址（已尝试 ${ladder.join(" / ")} 档音质，可能是版权限制）。`,
+                )
+              : error;
+          if (state && !state.config.economyMode && finalError.code === NO_URL_ERROR) {
+            rememberUnavailableTrack(state, source, id, finalError);
           }
-          throw error;
+          throw finalError;
         }
         if (!isTierUnavailable(error)) throw error;
       }
@@ -1008,10 +1082,13 @@ const createResolutionCore = () => {
     const descriptor = getTrackDescriptor(track);
     const requestedQuality = QUALITY_NAMES.includes(quality) ? quality : "hq";
     const deadline = Date.now() + RESOLUTION_TIME_BUDGET;
+    // 整站 5xx 时跨平台兜底打的是同一个域名，只会多耗请求；等恢复后再兜底。
+    const serviceOutage = remainingSeconds(state.serviceOutageUntil) > 0;
     const canCrossSearch =
       Boolean(policy.crossPlatform?.length) &&
       Boolean(descriptor.name) &&
-      state.config.crossPlatformFallback;
+      state.config.crossPlatformFallback &&
+      !serviceOutage;
 
     const cooldownSeconds = coolingDown(state.channelCooldowns, source);
     if (cooldownSeconds > 0) {
@@ -1045,8 +1122,8 @@ const createResolutionCore = () => {
       return result;
     } catch (error) {
       noteChannelFailure(state, source, error);
-      const shouldCrossSearch =
-        canCrossSearch && (error?.code === NO_URL_ERROR || isUpstreamUnavailableError(error));
+      // 5xx 是 GD 接口整站故障，跨平台兜底打的是同一个域名，只会增加请求与耗时。
+      const shouldCrossSearch = canCrossSearch && error?.code === NO_URL_ERROR;
       if (!shouldCrossSearch) throw error;
 
       const fallback = await resolveAcrossPlatforms(

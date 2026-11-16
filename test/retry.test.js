@@ -13,6 +13,7 @@ const neteaseTrack = {
 test("retries a transient 503 and succeeds", async () => {
   let attempts = 0;
   const { handlers, requests, logs } = loadPlugin({
+    fastTimers: true,
     route: (requestUrl) => {
       if (requestUrl.searchParams.get("types") !== "url") {
         return { status: 200, body: [] };
@@ -42,8 +43,9 @@ test("retries a transient 503 and succeeds", async () => {
   );
 });
 
-test("gives up after three attempts and reports the attempt count", async () => {
+test("gives up after six attempts and reports the retry count", async () => {
   const { handlers, requests } = loadPlugin({
+    fastTimers: true,
     settings: { crossPlatformFallback: false },
     route: () => ({ status: 503, body: "<html>503</html>" }),
   });
@@ -52,16 +54,50 @@ test("gives up after three attempts and reports the attempt count", async () => 
     handlers.musicUrl({ source: "wy", quality: "hq", musicInfo: neteaseTrack }),
     (error) => {
       assert.equal(error.code, "GD_HTTP_503");
-      assert.match(error.message, /已尝试 3 次/);
+      assert.match(error.message, /接口暂时不可用/);
+      assert.match(error.message, /已重试 5 次/);
+      assert.match(error.message, /自动恢复/);
       return true;
     },
   );
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 6);
+});
+
+test("breaker turns retries into a single probe during an outage", async () => {
+  const { handlers, requests } = loadPlugin({
+    fastTimers: true,
+    settings: { crossPlatformFallback: false, smartCache: false },
+    route: () => ({ status: 503, body: "<html>503</html>" }),
+  });
+
+  // 第一首歌重试 6 次、累计 3 次以上 5xx，触发熔断。
+  await assert.rejects(
+    handlers.musicUrl({ source: "wy", quality: "hq", musicInfo: neteaseTrack }),
+    (error) => error.code === "GD_HTTP_503",
+  );
+  const afterFirst = requests.length;
+  assert.equal(afterFirst, 6);
+
+  // 熔断期内只探测一次，不再反复重试。
+  await assert.rejects(
+    handlers.musicUrl({
+      source: "wy",
+      quality: "hq",
+      musicInfo: { songmid: "other", name: "另一首", singer: "歌手" },
+    }),
+    (error) => {
+      assert.equal(error.code, "GD_HTTP_503");
+      assert.match(error.message, /自动恢复/);
+      return true;
+    },
+  );
+  assert.equal(requests.length, afterFirst + 1);
 });
 
 test("retries a transient network failure", async () => {
   let attempts = 0;
   const { handlers } = loadPlugin({
+    fastTimers: true,
     route: (requestUrl) => {
       if (requestUrl.searchParams.get("types") !== "url") {
         return { status: 200, body: [] };
@@ -84,6 +120,7 @@ test("retries a transient network failure", async () => {
 
 test("does not retry a 429 rate-limit response", async () => {
   const { handlers, requests } = loadPlugin({
+    fastTimers: true,
     route: () => ({
       status: 429,
       headers: { "Retry-After": "30" },

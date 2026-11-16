@@ -90,6 +90,7 @@ test("clears cached responses when the configuration changes", async () => {
 
 test("maps a host request timeout to the resolution timeout error", async () => {
   const { handlers } = loadPlugin({
+    fastTimers: true,
     route: () => Promise.reject({ code: "PLUGIN_REQUEST_TIMEOUT", message: "host timeout" }),
   });
 
@@ -103,8 +104,9 @@ test("maps a host request timeout to the resolution timeout error", async () => 
   );
 });
 
-test("maps transport failures to GD_NETWORK_ERROR", async () => {
-  const { handlers } = loadPlugin({
+test("maps transport failures to GD_NETWORK_ERROR after retrying", async () => {
+  const { handlers, requests } = loadPlugin({
+    fastTimers: true,
     route: () => Promise.reject(new Error("connect ECONNREFUSED")),
   });
 
@@ -116,6 +118,8 @@ test("maps transport failures to GD_NETWORK_ERROR", async () => {
       return true;
     },
   );
+  // 网络错误同样会重试，6 次都失败才抛出。
+  assert.equal(requests.length, 6);
 });
 
 test("does not downgrade a tier when the host cannot run the delivery probe", async () => {
